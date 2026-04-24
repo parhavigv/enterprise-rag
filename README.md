@@ -12,7 +12,7 @@ A production-grade RAG (Retrieval-Augmented Generation) pipeline built over 4 we
 ## Week 1 — Ingestion Pipeline (In Progress)
 - [x] Day 1: Repo scaffold, environment setup, smoke tests
 - [x] Day 2: Multi-format parsers (PDF, DOCX, URL)
-- [ ] Day 3: Semantic chunker + embedder
+- [x] Day 3: Semantic chunker + embedder
 - [ ] Day 4: ChromaDB dense store
 - [ ] Day 5: BM25 sparse indexer
 - [ ] Day 6: Cross-encoder re-ranker
