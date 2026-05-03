@@ -1,27 +1,33 @@
-﻿# Python
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
-.Python
 
 # Virtual environment
 .venv/
 venv/
 env/
 
-# Environment secrets
+# Secrets
 .env
 .env.local
 
-# Generated indexes (derived artefacts - never commit)
+# Generated indexes
 chroma_data/
 bm25_index.pkl
 *.pkl
 
-# Data files
+# Data
 data/
+
+# Notebooks checkpoints
+notebooks/
+.ipynb_checkpoints/
 
 # IDE
 .vscode/
 .idea/
+
+# Pytest
+.pytest_cache/

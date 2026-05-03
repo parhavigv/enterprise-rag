@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.10"
+
+    - name: Install dependencies
+      run: |
+        pip install --upgrade pip
+        pip install rank-bm25 pytest sentence-transformers numpy
+
+    - name: Run BM25 tests
+      run: python -m pytest tests/test_bm25_indexer.py -v
+
+    - name: Run cross-encoder tests
+      run: python -m pytest tests/test_cross_encoder.py -v
+
+    - name: Run eval harness
+      run: python -m pytest tests/test_eval_harness.py -v -s
