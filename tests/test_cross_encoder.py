@@ -1,6 +1,7 @@
-﻿import pytest
 from unittest.mock import MagicMock, patch
+
 import numpy as np
+import pytest
 
 from retrieval.reranker import CrossEncoderReranker
 
@@ -24,16 +25,18 @@ QUERY = "How does the hybrid retriever combine BM25 and ChromaDB?"
 def mock_reranker():
     with patch("retrieval.reranker.cross_encoder.CrossEncoder") as MockCE:
         instance = MagicMock()
-        def fake_predict(pairs):
+
+        def fake_predict(pairs, batch_size=None):
             scores = []
             for _, doc in pairs:
                 q_words = set(QUERY.lower().split())
                 d_words = set(doc.lower().split())
                 scores.append(float(len(q_words & d_words)))
             return np.array(scores)
+
         instance.predict.side_effect = fake_predict
         MockCE.return_value = instance
-        reranker = CrossEncoderReranker(model_name="mock-model")
+        reranker = CrossEncoderReranker(model_name="mock-model", lazy_load=True)
         yield reranker
 
 
@@ -105,6 +108,7 @@ class TestRerankWithIds:
 class TestWeek2InterfaceContract:
     def test_import_from_package(self):
         from retrieval.reranker import CrossEncoderReranker as CE
+
         assert CE is not None
 
     def test_rerank_signature(self, mock_reranker):

@@ -1,153 +1,239 @@
-import logging
+"""Persistent ChromaDB adapter.
+
+Wraps upsert / query / delete / count and exposes a ``health()`` probe used
+by the service readiness endpoint. Supports both the embedded persistent
+client (default) and a remote Chroma server via ``CHROMA_SERVER_ENABLED``.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from typing import Any
+
 import chromadb
 from chromadb.config import Settings
 from llama_index.core.schema import TextNode
-from typing import List
 
-# Module level logger — replaces all print() statements
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)s | %(name)s | %(message)s'
-)
-logger = logging.getLogger(__name__)
+from app.core.logging import get_logger
+from retrieval.types import RetrievedDocument
+
+logger = get_logger(__name__)
 
 
 class ChromaAdapter:
-    """
-    Persistent ChromaDB adapter — wraps upsert, dedup, and query.
-    Week 2 DenseRetriever imports this class directly.
-    """
+    """Thin, defensive wrapper around a ChromaDB collection."""
 
     def __init__(
         self,
-        path: str = './chroma_data',
-        collection: str = 'enterprise_rag'
-    ):
+        path: str = "./data/chroma",
+        collection: str = "enterprise_rag",
+        server_enabled: bool = False,
+        server_host: str = "localhost",
+        server_port: int = 8000,
+    ) -> None:
         try:
-            self.client = chromadb.PersistentClient(
-                path=path,
-                settings=Settings(anonymized_telemetry=False)
-            )
+            if server_enabled:
+                self.client = chromadb.HttpClient(
+                    host=server_host,
+                    port=server_port,
+                    settings=Settings(anonymized_telemetry=False),
+                )
+            else:
+                self.client = chromadb.PersistentClient(
+                    path=path,
+                    settings=Settings(anonymized_telemetry=False),
+                )
             self.col = self.client.get_or_create_collection(
                 name=collection,
-                metadata={'hnsw:space': 'cosine'}
+                metadata={"hnsw:space": "cosine"},
             )
-            logger.info(f"ChromaAdapter ready | collection: {collection} | path: {path}")
-        except Exception as e:
-            logger.error(f"Failed to initialise ChromaDB: {e}")
+            self._dimension: int | None = None
+            logger.info(
+                "ChromaAdapter ready | collection={} | mode={}",
+                collection,
+                "server" if server_enabled else "embedded",
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error("Failed to initialise ChromaDB: {}", e)
             raise RuntimeError(f"ChromaDB init failed: {e}") from e
 
-    def _sanitise_metadata(self, metadata: dict) -> dict:
-        """
-        ChromaDB only accepts str, int, float, bool values.
-        Converts everything else to string and drops None values.
-        """
-        sanitised = {}
-        for k, v in metadata.items():
-            if v is None:
-                continue  # drop None values
-            elif isinstance(v, (str, int, float, bool)):
-                sanitised[k] = v
-            else:
-                sanitised[k] = str(v)  # convert lists, dicts, etc to string
-        return sanitised
-
-    def _validate_nodes(self, nodes: List[TextNode]) -> None:
-        """
-        Validate nodes before upsert.
-        Raises ValueError if nodes are empty or missing embeddings.
-        """
-        if not nodes:
-            raise ValueError("upsert called with empty nodes list")
-
-        missing = [n.node_id for n in nodes if n.embedding is None]
-        if missing:
-            raise ValueError(
-                f"{len(missing)} nodes have no embedding. "
-                f"First missing node_id: {missing[0]}"
-            )
-
-        dims = set(len(n.embedding) for n in nodes)
-        if len(dims) > 1:
-            raise ValueError(
-                f"Inconsistent embedding dimensions found: {dims}. "
-                f"All embeddings must have the same dimension."
-            )
-
-    def upsert(self, nodes: List[TextNode]) -> None:
-        """
-        Upsert TextNodes into ChromaDB.
-        Idempotent — re-ingesting same node_ids overwrites, never duplicates.
-        """
+    # ------------------------------------------------------------------ #
+    # Write path
+    # ------------------------------------------------------------------ #
+    def upsert(self, nodes: list[TextNode]) -> None:
+        """Idempotent upsert of ``TextNode`` objects."""
+        self._validate_nodes(nodes)
         try:
-            self._validate_nodes(nodes)
-
-            ids        = [n.node_id for n in nodes]
+            ids = [n.node_id for n in nodes]
             embeddings = [n.embedding for n in nodes]
-            documents  = [n.text for n in nodes]
-            metadatas  = [self._sanitise_metadata(n.metadata) for n in nodes]
+            documents = [n.text for n in nodes]
+            metadatas = [self._sanitise_metadata(dict(n.metadata)) for n in nodes]
 
             self.col.upsert(
-                ids=ids,
-                embeddings=embeddings,
-                documents=documents,
-                metadatas=metadatas
+                ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas
             )
-            logger.info(f"Upserted {len(nodes)} nodes | collection total: {self.col.count()}")
-
-        except ValueError as e:
-            logger.error(f"Validation error before upsert: {e}")
+            self._dimension = len(embeddings[0])
+            logger.info(
+                "Upserted {} nodes | collection total: {}",
+                len(nodes),
+                self.col.count(),
+            )
+        except ValueError:
             raise
-        except Exception as e:
-            logger.error(f"ChromaDB upsert failed: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.error("ChromaDB upsert failed: {}", e)
             raise RuntimeError(f"Upsert failed: {e}") from e
 
-    def query(
-        self,
-        embedding: List[float],
-        top_k: int = 20
-    ) -> dict:
-        """
-        Top-k cosine similarity query.
-        Returns ChromaDB result dict with ids, documents, metadatas, distances.
-        Week 2 DenseRetriever calls this method directly.
-        """
+    def delete(self, ids: Iterable[str]) -> None:
+        """Delete nodes by id (no-op for unknown ids)."""
+        id_list = list(ids)
+        if not id_list:
+            return
         try:
-            if not embedding:
-                raise ValueError("Query embedding is empty")
+            self.col.delete(ids=id_list)
+            logger.info("Deleted {} nodes", len(id_list))
+        except Exception as e:  # noqa: BLE001
+            logger.error("ChromaDB delete failed: {}", e)
+            raise RuntimeError(f"Delete failed: {e}") from e
 
+    # ------------------------------------------------------------------ #
+    # Read path
+    # ------------------------------------------------------------------ #
+    def query(self, embedding: list[float], top_k: int = 20) -> list[RetrievedDocument]:
+        """Top-k cosine similarity search, returning typed hits."""
+        if not embedding:
+            raise ValueError("Query embedding is empty")
+        if top_k < 1:
+            raise ValueError("top_k must be >= 1")
+
+        try:
             results = self.col.query(
                 query_embeddings=[embedding],
                 n_results=top_k,
-                include=['documents', 'metadatas', 'distances']
+                include=["documents", "metadatas", "distances"],
             )
-            logger.info(f"Query returned {len(results['documents'][0])} results | top_k={top_k}")
-            return results
-
-        except ValueError as e:
-            logger.error(f"Validation error before query: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"ChromaDB query failed: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.error("ChromaDB query failed: {}", e)
             raise RuntimeError(f"Query failed: {e}") from e
 
-    def count(self) -> int:
-        """Return total documents in collection."""
+        ids = results.get("ids", [[]])[0]
+        docs = results.get("documents", [[]])[0]
+        metas = results.get("metadatas", [[]])[0]
+        dists = results.get("distances", [[]])[0]
+
+        # Chroma distances are cosine *distances*: lower is better.
+        return [
+            RetrievedDocument(
+                node_id=i,
+                text=d,
+                score=1.0 - dist,  # convert distance -> similarity in [0,1]
+                metadata=m or {},
+                source="dense",
+            )
+            for i, d, m, dist in zip(ids, docs, metas, dists, strict=False)
+        ]
+
+    def get(self, node_id: str) -> RetrievedDocument | None:
+        """Fetch a single document by id."""
         try:
-            return self.col.count()
-        except Exception as e:
-            logger.error(f"Failed to get collection count: {e}")
+            result = self.col.get(ids=[node_id], include=["documents", "metadatas"])
+        except Exception as e:  # noqa: BLE001
+            logger.error("ChromaDB get failed: {}", e)
+            raise RuntimeError(f"Get failed: {e}") from e
+        ids = result.get("ids", [])
+        if not ids:
+            return None
+        return RetrievedDocument(
+            node_id=ids[0],
+            text=result["documents"][0],
+            score=1.0,
+            metadata=result["metadatas"][0] or {},
+            source="dense",
+        )
+
+    def count(self) -> int:
+        try:
+            return int(self.col.count())
+        except Exception as e:  # noqa: BLE001
+            logger.error("Failed to get collection count: {}", e)
             raise RuntimeError(f"Count failed: {e}") from e
 
     def reset(self) -> None:
-        """Delete and recreate the collection — use for fresh ingestion only."""
+        """Drop and recreate the collection (fresh ingestion)."""
         try:
             self.client.delete_collection(self.col.name)
             self.col = self.client.get_or_create_collection(
                 name=self.col.name,
-                metadata={'hnsw:space': 'cosine'}
+                metadata={"hnsw:space": "cosine"},
             )
-            logger.warning("Collection reset — all embeddings cleared")
-        except Exception as e:
-            logger.error(f"Collection reset failed: {e}")
+            self._dimension = None
+            logger.warning("Collection reset - all embeddings cleared")
+        except Exception as e:  # noqa: BLE001
+            logger.error("Collection reset failed: {}", e)
             raise RuntimeError(f"Reset failed: {e}") from e
+
+    # ------------------------------------------------------------------ #
+    # Factories
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def from_env(settings) -> ChromaAdapter:
+        return ChromaAdapter(
+            path=settings.chroma_path,
+            collection=settings.chroma_collection,
+            server_enabled=settings.chroma_server_enabled,
+            server_host=settings.chroma_server_host,
+            server_port=settings.chroma_server_port,
+        )
+
+    # ------------------------------------------------------------------ #
+    # Health / introspection
+    # ------------------------------------------------------------------ #
+    def health(self) -> bool:
+        try:
+            self.col.count()
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def dimension(self) -> int | None:
+        if self._dimension is not None:
+            return self._dimension
+        try:
+            count = self.col.count()
+            if count == 0:
+                return None
+            sample = self.col.get(limit=1, include=["embeddings"])
+            if sample.get("embeddings"):
+                self._dimension = len(sample["embeddings"][0])
+            return self._dimension
+        except Exception:  # noqa: BLE001
+            return None
+
+    # ------------------------------------------------------------------ #
+    # Helpers
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _sanitise_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+        """Keep only ChromaDB-safe value types (str/int/float/bool)."""
+        sanitised: dict[str, Any] = {}
+        for k, v in metadata.items():
+            if v is None:
+                continue
+            if isinstance(v, str | int | float | bool):
+                sanitised[k] = v
+            else:
+                sanitised[k] = str(v)
+        return sanitised
+
+    @staticmethod
+    def _validate_nodes(nodes: list[TextNode]) -> None:
+        if not nodes:
+            raise ValueError("upsert called with empty nodes list")
+        missing = [n.node_id for n in nodes if getattr(n, "embedding", None) is None]
+        if missing:
+            raise ValueError(
+                f"{len(missing)} nodes have no embedding. First missing node_id: {missing[0]}"
+            )
+        dims = {len(n.embedding) for n in nodes}
+        if len(dims) > 1:
+            raise ValueError(f"Inconsistent embedding dimensions found: {dims}")

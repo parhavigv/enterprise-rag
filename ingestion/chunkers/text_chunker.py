@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import Any
 
 
 def chunk_text(
@@ -7,7 +7,7 @@ def chunk_text(
     doc_type: str,
     chunk_size: int = 500,
     chunk_overlap: int = 50,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     if not text or not text.strip():
         return []
     words = text.split()
@@ -19,7 +19,15 @@ def chunk_text(
     for word in words:
         word_len = len(word) + 1
         if current_len + word_len > chunk_size and current_words:
-            chunks.append({"text": " ".join(current_words), "source": source, "doc_type": doc_type, "chunk_index": chunk_index, "char_start": char_start})
+            chunks.append(
+                {
+                    "text": " ".join(current_words),
+                    "source": source,
+                    "doc_type": doc_type,
+                    "chunk_index": chunk_index,
+                    "char_start": char_start,
+                }
+            )
             overlap_words = []
             overlap_len = 0
             for w in reversed(current_words):
@@ -35,5 +43,13 @@ def chunk_text(
         current_words.append(word)
         current_len += word_len
     if current_words:
-        chunks.append({"text": " ".join(current_words), "source": source, "doc_type": doc_type, "chunk_index": chunk_index, "char_start": char_start})
+        chunks.append(
+            {
+                "text": " ".join(current_words),
+                "source": source,
+                "doc_type": doc_type,
+                "chunk_index": chunk_index,
+                "char_start": char_start,
+            }
+        )
     return chunks

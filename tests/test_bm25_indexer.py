@@ -1,7 +1,6 @@
-﻿import pickle
+import pickle
 import time
 import uuid
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -50,7 +49,10 @@ class TestBM25Build:
             indexer.build([])
 
     def test_build_is_fast_enough(self, tmp_path):
-        large_nodes = [_make_node(f"chunk text sample number {i} for bm25 performance test") for i in range(5000)]
+        large_nodes = [
+            _make_node(f"chunk text sample number {i} for bm25 performance test")
+            for i in range(5000)
+        ]
         indexer = BM25Indexer(index_path=tmp_path / "large.pkl")
         t0 = time.perf_counter()
         indexer.build(large_nodes)
@@ -147,10 +149,12 @@ class TestBM25Query:
         assert isinstance(results, list)
 
     def test_relevant_doc_ranks_higher_than_irrelevant(self):
-        results = self.indexer.query("nomic embed text 768 dimensional vectors", top_k=len(SAMPLE_NODES))
+        results = self.indexer.query(
+            "nomic embed text 768 dimensional vectors", top_k=len(SAMPLE_NODES)
+        )
         rank = {doc_id: i for i, (doc_id, _) in enumerate(results)}
         nomic_id = SAMPLE_NODES[4].node_id
-        bm25_id  = SAMPLE_NODES[2].node_id
+        bm25_id = SAMPLE_NODES[2].node_id
         assert rank[nomic_id] < rank[bm25_id]
 
 
@@ -164,6 +168,7 @@ class TestWeek2InterfaceContract:
 
     def test_import_from_package(self):
         from retrieval.bm25 import BM25Indexer as _BM25Indexer
+
         assert _BM25Indexer is not None
 
     def test_classmethod_load(self, tmp_path):

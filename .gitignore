@@ -15,14 +15,20 @@ env/
 
 # Generated indexes
 chroma_data/
+data/chroma/
+data/bm25_index.pkl
 bm25_index.pkl
 *.pkl
 
 # Data
-data/
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
 
 # Notebooks checkpoints
-notebooks/
+notebooks/*
+!notebooks/.gitkeep
 .ipynb_checkpoints/
 
 # IDE
@@ -31,3 +37,7 @@ notebooks/
 
 # Pytest
 .pytest_cache/
+
+# Local server artifacts
+*.log
+*.pid

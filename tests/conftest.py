@@ -2,10 +2,19 @@
 tests/conftest.py
 Shared pytest fixtures for the Enterprise RAG test suite.
 """
+
+from __future__ import annotations
+
+import os
 import uuid
 from unittest.mock import MagicMock
+
 import pytest
-from retrieval.bm25 import BM25Indexer
+
+# Must be set before llama_index/nltk is imported anywhere.
+os.environ.setdefault("NLTK_DISABLE_IMPORT_SECURITY", "1")
+
+from retrieval.bm25 import BM25Indexer  # noqa: E402
 
 SAMPLE_TEXTS = [
     "The ingestion pipeline supports PDF, DOCX, and URL formats.",
@@ -20,13 +29,17 @@ SAMPLE_TEXTS = [
     "The .env file stores API keys and must never be committed.",
 ]
 
+
 def make_node(text, node_id=None):
     node = MagicMock()
     node.node_id = node_id or str(uuid.uuid4())
     node.text = text
+    node.metadata = {"source": "fixture"}
     return node
 
+
 SAMPLE_NODES = [make_node(t) for t in SAMPLE_TEXTS]
+
 
 @pytest.fixture(scope="session")
 def shared_bm25(tmp_path_factory):

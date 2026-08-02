@@ -1,8 +1,10 @@
-﻿import json
+import json
 import uuid
 from pathlib import Path
 from unittest.mock import MagicMock
+
 import pytest
+
 from retrieval.bm25 import BM25Indexer
 
 GOLD_SET_PATH = Path("tests/eval/gold_set.json")
@@ -25,11 +27,13 @@ CORPUS = [
     "Embeddings are generated in batches with exponential backoff retry logic on failure.",
 ]
 
+
 def _make_node(text):
     node = MagicMock()
     node.node_id = str(uuid.uuid4())
     node.text = text
     return node
+
 
 @pytest.fixture(scope="module")
 def bm25_indexer(tmp_path_factory):
@@ -42,7 +46,7 @@ def bm25_indexer(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def gold_set():
-    with open(GOLD_SET_PATH, "r", encoding="utf-8-sig") as f:
+    with open(GOLD_SET_PATH, encoding="utf-8-sig") as f:
         return json.load(f)
 
 
@@ -80,7 +84,11 @@ class TestGoldSetEval:
         for item in gold_set:
             keywords = [k.lower() for k in item["relevant_keywords"]]
             results = indexer.query(item["question"], top_k=5)
-            relevant = sum(1 for doc_id, _ in results if any(kw in id_to_text.get(doc_id, "").lower() for kw in keywords))
+            relevant = sum(
+                1
+                for doc_id, _ in results
+                if any(kw in id_to_text.get(doc_id, "").lower() for kw in keywords)
+            )
             total += relevant / len(results) if results else 0
         avg = total / len(gold_set)
         print(f"\n  Precision@5 = {avg:.2f}")
@@ -98,5 +106,3 @@ class TestGoldSetEval:
             results = indexer.query(item["question"], top_k=5)
             scores = [s for _, s in results]
             assert scores == sorted(scores, reverse=True)
-
-

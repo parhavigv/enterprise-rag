@@ -1,39 +1,31 @@
-﻿# ingestion/embedders/nomic_embedder.py
-import httpx
-import asyncio
+"""Backward-compatible module facade for the Ollama embedder.
+
+Existing code (`from ingestion.embedders.nomic_embedder import embed_documents`)
+keeps working; new code should prefer ``OllamaEmbedder``.
+"""
+
+from __future__ import annotations
+
 import os
+
 from dotenv import load_dotenv
+
+from ingestion.embedders.ollama_embedder import EmbedderError, OllamaEmbedder  # noqa: F401
 
 load_dotenv()
 
-OLLAMA_URL = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434') + '/api/embeddings'
-MODEL = os.getenv('EMBED_MODEL', 'nomic-embed-text')
-BATCH_SIZE = int(os.getenv('EMBED_BATCH_SIZE', 32))
+_OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
+_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "32"))
 
-
-async def embed_batch(texts: list[str], retries: int = 3) -> list[list[float]]:
-    for attempt in range(retries):
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                tasks = [
-                    client.post(OLLAMA_URL, json={'model': MODEL, 'prompt': t})
-                    for t in texts
-                ]
-                responses = await asyncio.gather(*tasks)
-                return [r.json()['embedding'] for r in responses]
-        except Exception as e:
-            if attempt == retries - 1:
-                raise
-            wait = 2 ** attempt
-            print(f'Embed attempt {attempt+1} failed: {e}. Retrying in {wait}s...')
-            await asyncio.sleep(wait)
+_default_embedder = OllamaEmbedder(base_url=_OLLAMA_URL, model=_MODEL, batch_size=_BATCH_SIZE)
 
 
 def embed_documents(texts: list[str]) -> list[list[float]]:
-    all_embeddings = []
-    for i in range(0, len(texts), BATCH_SIZE):
-        batch = texts[i:i+BATCH_SIZE]
-        print(f'Embedding batch {i//BATCH_SIZE + 1} ({len(batch)} chunks)...')
-        embeddings = asyncio.run(embed_batch(batch))
-        all_embeddings.extend(embeddings)
-    return all_embeddings
+    """Embed a list of document texts (module-level convenience)."""
+    return _default_embedder.embed(texts)
+
+
+def embed_query(text: str) -> list[float]:
+    """Embed a single query text."""
+    return _default_embedder.embed_query(text)

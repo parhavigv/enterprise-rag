@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import logging
@@ -8,9 +8,10 @@ import re
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
 
 from rank_bm25 import BM25Okapi
+
+from retrieval.types import RetrievedDocument
 
 logger = logging.getLogger(__name__)
 
@@ -18,18 +19,20 @@ DEFAULT_INDEX_PATH = Path(os.getenv("BM25_INDEX_PATH", "./bm25_index.pkl"))
 _PUNCTUATION_RE = re.compile(r"[^\w\s]")
 
 
-def _default_tokeniser(text: str) -> List[str]:
+def _default_tokeniser(text: str) -> list[str]:
     text = text.lower()
     text = _PUNCTUATION_RE.sub(" ", text)
     return text.split()
 
 
 class _BM25Payload:
-    __slots__ = ("index", "doc_ids", "corpus_hash", "created_at")
+    __slots__ = ("index", "doc_ids", "doc_texts", "doc_metas", "corpus_hash", "created_at")
 
-    def __init__(self, index, doc_ids, corpus_hash):
+    def __init__(self, index, doc_ids, doc_texts, doc_metas, corpus_hash):
         self.index = index
         self.doc_ids = doc_ids
+        self.doc_texts = doc_texts
+        self.doc_metas = doc_metas
         self.corpus_hash = corpus_hash
         self.created_at = time.time()
 
@@ -38,14 +41,15 @@ class BM25Indexer:
     def __init__(self, index_path=DEFAULT_INDEX_PATH, tokeniser=None):
         self._index_path = Path(index_path)
         self._tokeniser = tokeniser or _default_tokeniser
-        self._payload: Optional[_BM25Payload] = None
+        self._payload: _BM25Payload | None = None
 
-    def build(self, nodes, force: bool = False) -> "BM25Indexer":
+    def build(self, nodes, force: bool = False) -> BM25Indexer:
         if not nodes:
             raise ValueError("Cannot build BM25 index from an empty node list.")
 
         texts = [n.text for n in nodes]
         doc_ids = [n.node_id for n in nodes]
+        doc_metas = [dict(getattr(n, "metadata", {}) or {}) for n in nodes]
         corpus_hash = _hash_corpus(texts)
 
         if not force and self._index_path.exists():
@@ -63,28 +67,69 @@ class BM25Indexer:
 
         tokenised = [self._tokeniser(t) for t in texts]
         index = BM25Okapi(tokenised)
-        payload = _BM25Payload(index=index, doc_ids=doc_ids, corpus_hash=corpus_hash)
+        payload = _BM25Payload(
+            index=index,
+            doc_ids=doc_ids,
+            doc_texts=dict(zip(doc_ids, texts, strict=False)),
+            doc_metas=dict(zip(doc_ids, doc_metas, strict=False)),
+            corpus_hash=corpus_hash,
+        )
 
         _atomic_save(payload, self._index_path)
         self._payload = payload
 
         elapsed = time.perf_counter() - t0
-        print(f"BM25 index built in {elapsed:.2f}s  |  {len(texts)} chunks  |  saved -> {self._index_path}")
+        print(
+            f"BM25 index built in {elapsed:.2f}s  |  {len(texts)} chunks  |  "
+            f"saved -> {self._index_path}"
+        )
         return self
 
-    def query(self, query_text: str, top_k: int = 20) -> List[Tuple[str, float]]:
+    def query(self, query_text: str, top_k: int = 20) -> list[tuple[str, float]]:
         if self._payload is None:
             raise RuntimeError("BM25 index not loaded. Call BM25Indexer.load() or .build() first.")
 
         tokenised_query = self._tokeniser(query_text)
         scores = self._payload.index.get_scores(tokenised_query).tolist()
-        scored = sorted(zip(self._payload.doc_ids, scores), key=lambda x: x[1], reverse=True)
+        scored = sorted(
+            zip(self._payload.doc_ids, scores, strict=False),
+            key=lambda x: x[1],
+            reverse=True,
+        )
         return scored[:top_k]
 
+    def query_documents(self, query_text: str, top_k: int = 20) -> list[RetrievedDocument]:
+        """Query and hydrate sparse hits into ``RetrievedDocument`` objects."""
+        results = self.query(query_text, top_k=top_k)
+        out: list[RetrievedDocument] = []
+        for doc_id, score in results:
+            if doc_id in self._payload.doc_texts:
+                out.append(
+                    RetrievedDocument(
+                        node_id=doc_id,
+                        text=self._payload.doc_texts[doc_id],
+                        score=float(score),
+                        metadata=self._payload.doc_metas.get(doc_id, {}),
+                        source="sparse",
+                    )
+                )
+        return out
+
+    def document_text(self, doc_id: str) -> str | None:
+        if self._payload is None:
+            return None
+        return self._payload.doc_texts.get(doc_id)
+
     @classmethod
-    def load(cls, index_path=DEFAULT_INDEX_PATH, tokeniser=None) -> "BM25Indexer":
+    def load(cls, index_path=DEFAULT_INDEX_PATH, tokeniser=None) -> BM25Indexer:
         indexer = cls(index_path=index_path, tokeniser=tokeniser)
-        indexer._payload = _load_payload(Path(index_path))
+        payload = _load_payload(Path(index_path))
+        if not hasattr(payload, "doc_texts") or not hasattr(payload, "doc_metas"):
+            raise RuntimeError(
+                f"BM25 index at '{index_path}' is an outdated format. "
+                "Rebuild it with ingestion --rebuild-bm25 to upgrade."
+            )
+        indexer._payload = payload
         print(f"BM25 index loaded  |  {len(indexer._payload.doc_ids)} chunks")
         return indexer
 
@@ -98,7 +143,7 @@ class BM25Indexer:
         return self._index_path
 
 
-def _hash_corpus(texts: List[str]) -> str:
+def _hash_corpus(texts: list[str]) -> str:
     h = hashlib.sha256()
     for t in texts:
         h.update(t.encode("utf-8"))

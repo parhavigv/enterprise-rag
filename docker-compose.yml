@@ -1,0 +1,62 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: enterprise-rag-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      LLM_BASE_URL: http://ollama:11434/v1
+      CHROMA_PATH: /srv/app/data/chroma
+      BM25_INDEX_PATH: /srv/app/data/bm25_index.pkl
+    volumes:
+      - rag_data:/srv/app/data
+    depends_on:
+      ollama:
+        condition: service_healthy
+      models-init:
+        condition: service_completed_successfully
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: enterprise-rag-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  models-init:
+    image: ollama/ollama:latest
+    container_name: enterprise-rag-models-init
+    restart: "no"
+    volumes:
+      - ollama_models:/root/.ollama
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Pulling embedding model (nomic-embed-text)..."
+        ollama pull nomic-embed-text
+        echo "Pulling LLM model (${LLM_MODEL:-llama3.1})..."
+        ollama pull "${LLM_MODEL:-llama3.1}"
+        echo "Models ready."
+
+volumes:
+  rag_data:
+  ollama_models:
