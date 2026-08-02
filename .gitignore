@@ -41,3 +41,4 @@ notebooks/*
 # Local server artifacts
 *.log
 *.pid
+query_result.json

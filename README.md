@@ -161,7 +161,7 @@ docker compose up --build -d
 `.github/workflows/ci.yml` runs on `main`/`master`:
 
 1. **Lint** — `ruff check` + `ruff format --check` (line length 100).
-2. **Unit tests** — full pytest suite (110 tests); Ollama-dependent tests are
+2. **Unit tests** — full pytest suite (112 tests); Ollama-dependent tests are
    marker-deselected in CI (`-m "not ollama"`).
 3. **Docker build** — verifies the image builds and healthchecks pass.
 
@@ -255,7 +255,7 @@ scripts/
   seed.py            # index documents / built-in demo corpus
   eval.py            # gold-set evaluation
   smoke_test.py      # live end-to-end API verification
-tests/               # 110 unit tests
+tests/               # 112 unit tests
 Dockerfile           # production image
 docker-compose.yml   # api + ollama + models-init
 .github/workflows/   # CI: lint → test → docker
