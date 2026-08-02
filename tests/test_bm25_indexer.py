@@ -109,6 +109,37 @@ class TestBM25Persistence:
             payload = pickle.load(f)
         assert len(payload.doc_ids) == len(SAMPLE_NODES)
 
+    def test_add_merges_into_existing_index(self, tmp_path):
+        idx_path = tmp_path / "idx.pkl"
+        BM25Indexer(index_path=idx_path).build(SAMPLE_NODES)
+        extra = _make_node("Enterprise RAG pricing: Starter $29, Business $99 per month.")
+        indexer = BM25Indexer(index_path=idx_path).add([extra])
+        assert indexer.count() == len(SAMPLE_NODES) + 1
+        # Persisted state must include both old and new documents.
+        reloaded = BM25Indexer.load(index_path=idx_path)
+        assert reloaded.count() == len(SAMPLE_NODES) + 1
+        hits = reloaded.query_documents("pricing Starter Business", top_k=3)
+        assert hits and any(d.node_id == extra.node_id for d in hits)
+
+    def test_add_is_idempotent_per_node_id(self, tmp_path):
+        idx_path = tmp_path / "idx.pkl"
+        BM25Indexer(index_path=idx_path).build(SAMPLE_NODES)
+        extra = _make_node("A second document about hybrid retrieval.")
+        BM25Indexer(index_path=idx_path).add([extra])
+        BM25Indexer(index_path=idx_path).add([extra])
+        assert BM25Indexer.load(index_path=idx_path).count() == len(SAMPLE_NODES) + 1
+
+    def test_add_works_from_scratch(self, tmp_path):
+        idx_path = tmp_path / "idx.pkl"
+        indexer = BM25Indexer(index_path=idx_path).add([_make_node("hello world")])
+        assert indexer.count() == 1
+        assert idx_path.exists()
+
+    def test_add_raises_on_empty_nodes(self, tmp_path):
+        indexer = BM25Indexer(index_path=tmp_path / "idx.pkl")
+        with pytest.raises(ValueError, match="empty"):
+            indexer.add([])
+
 
 class TestBM25Query:
     @pytest.fixture(autouse=True)

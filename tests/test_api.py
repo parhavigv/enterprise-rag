@@ -26,6 +26,10 @@ class _FakeContainer:
     def __init__(self) -> None:
         self.query_service_obj = _FakeQueryService()
         self.ingest_service_obj = _FakeIngestService()
+        self.settings = SimpleNamespace(
+            uploads_dir="./data/uploads",
+            chroma_collection="enterprise_rag",
+        )
 
     def adapter(self):
         return _HealthyProbe()
@@ -44,6 +48,9 @@ class _FakeContainer:
 
     def stats(self):
         return {"chroma_count": 10, "bm25_count": 10}
+
+    def refresh_index(self):
+        return None
 
 
 class _FakeQueryService:
@@ -188,3 +195,43 @@ def test_root(client):
     r = client.get("/")
     assert r.status_code == 200
     assert r.json()["service"] == "enterprise-rag"
+
+
+def test_ui_page(client):
+    r = client.get("/ui")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert "Upload" in r.text and "/api/v1/query" in r.text
+
+
+def test_upload_txt(client):
+    r = client.post(
+        "/api/v1/upload",
+        files={
+            "file": ("notes.txt", b"Hybrid retrieval fuses dense and sparse scores.", "text/plain")
+        },
+        data={"chunk_size": "512T"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["metrics"]["chunks"] == 12
+    assert body["metrics"]["filename"] == "notes.txt"
+
+
+def test_upload_rejects_unknown_type(client):
+    r = client.post(
+        "/api/v1/upload",
+        files={"file": ("virus.exe", b"MZ...", "application/octet-stream")},
+    )
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "invalid_input"
+
+
+def test_upload_rejects_empty_file(client):
+    r = client.post(
+        "/api/v1/upload",
+        files={"file": ("empty.txt", b"", "text/plain")},
+    )
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "invalid_input"

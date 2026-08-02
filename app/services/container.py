@@ -144,6 +144,17 @@ class Container:
     def ingest_service(self) -> IngestService:
         return self._memo("ingest_service", IngestService)
 
+    def refresh_index(self) -> None:
+        """Reload indexes from disk after ingestion so new docs are queryable.
+
+        The retriever stack (dense / hybrid / query service) is re-memoised;
+        heavier components (embedder, adapter, cache, reranker, researcher,
+        LLM client) are left untouched.
+        """
+        for key in ("dense", "hybrid", "bm25", "query_service"):
+            self._cache.pop(key, None)
+        logger.info("Index refreshed after ingestion.")
+
     def stats(self) -> dict:
         """Aggregate index statistics for observability endpoints."""
         try:

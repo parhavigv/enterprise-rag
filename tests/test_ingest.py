@@ -66,6 +66,31 @@ def test_run_ingestion_full_pipeline(tmp_path, monkeypatch):
     assert "embed_throughput_chunks_per_min" in metrics
 
 
+def test_run_ingestion_incremental_bm25_merge(tmp_path, monkeypatch):
+    monkeypatch.setitem(ingest_mod.PARSERS, "pdf", _fake_parser)
+    first = ingest_mod.run_ingestion(
+        path="fake.pdf",
+        fmt="pdf",
+        chunk_size="512T",
+        collection_name="test",
+        embedder=_FakeEmbedder(),
+        adapter=_FakeAdapter(),
+        bm25_index_path=str(tmp_path / "bm25.pkl"),
+    )
+    second = ingest_mod.run_ingestion(
+        path="fake.pdf",
+        fmt="pdf",
+        chunk_size="512T",
+        collection_name="test",
+        embedder=_FakeEmbedder(),
+        adapter=_FakeAdapter(),
+        bm25_index_path=str(tmp_path / "bm25.pkl"),
+    )
+    # The sparse index must accumulate across ingestion runs, not reset.
+    assert second["bm25_count"] >= first["bm25_count"]
+    assert first["bm25_count"] == first["chunks"]
+
+
 def test_run_ingestion_invalid_format(tmp_path):
     from app.core.errors import InvalidInputError
 

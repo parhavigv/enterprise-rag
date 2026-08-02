@@ -15,8 +15,9 @@ health probes, structured logging, caching, and CI.
 ```
                     ┌────────────────────────────────────────────────────────┐
                     │                     FastAPI service                    │
-                    │  /api/v1/ingest  /api/v1/search  /api/v1/query          │
-                    │  /health  /health/ready  /api/v1/stats                 │
+                    │  /api/v1/ingest  /api/v1/upload  /api/v1/search       │
+                    │  /api/v1/query  /health  /health/ready  /api/v1/stats │
+                    │  /ui  (browser demo)                                  │
                     └───────┬───────────────┬────────────────┬───────────────┘
                             │               │                │
               ingest        │     retrieve   │     generate   │
@@ -35,7 +36,8 @@ health probes, structured logging, caching, and CI.
 ```
 
 - **Ingestion** — `ingestion/ingest.py` runs a pluggable parser → semantic chunker →
-  Ollama embedder → ChromaDB upsert → BM25 (re)build pipeline.
+  Ollama embedder → ChromaDB upsert → BM25 incremental merge pipeline (new chunks are
+  merged into the persisted BM25 corpus instead of a full rebuild).
 - **Retrieval** — `retrieval/hybrid/hybrid_retriever.py` fuses dense hits (ChromaDB,
   cosine) with sparse hits (BM25Okapi) via RRF, then `retrieval/reranker/cross_encoder.py`
   re-orders the top candidates.
@@ -69,6 +71,9 @@ python -m scripts.seed --sample
 
 # 5. Run the API
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+
+# 6. (Optional) Upload your own files in the browser
+#    Open http://127.0.0.1:8000/ui
 ```
 
 Try it:
@@ -124,13 +129,39 @@ Parse, chunk, embed, and index a document or URL.
 ```jsonc
 {
   "path": "./data/raw/sample.pdf",   // or https://...
-  "format": "pdf",                   // pdf | docx | url
+  "format": "pdf",                   // pdf | docx | txt | url
   "chunk_size": "512T",              // 256T | 512T | 1024T
   "collection_name": "enterprise_rag",
   "rebuild_bm25": false,
   "background": false                // true → returns immediately, runs as a task
 }
 ```
+
+### `POST /api/v1/upload`
+Multipart file upload — the browser-friendly way to add documents. Accepts
+`.pdf`, `.docx`, `.txt`, `.md`, `.markdown`, `.csv`, and `.json` (up to 50 MB).
+The file is staged, parsed, chunked, embedded, and indexed into both dense and
+BM25 stores, then deleted. Returns the same metrics as `/ingest`.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/upload ^
+  -F "file=@guide.txt" -F "chunk_size=512T"
+```
+
+```jsonc
+// Response
+{
+  "status": "ok",
+  "background": false,
+  "metrics": { "docs_parsed": 1, "chunks": 3,
+               "chroma_count": 13, "bm25_count": 13, ... },
+  "filename": "guide.txt"
+}
+```
+
+### `GET /ui`
+Lightweight browser demo: upload a file, ask questions, and see the grounded
+answer with its source passages and retrieval metrics (no frontend build step).
 
 ### `GET /api/v1/stats`
 Index statistics: Chroma collection + count, BM25 path + count, active embed/LLM models.
@@ -161,7 +192,7 @@ docker compose up --build -d
 `.github/workflows/ci.yml` runs on `main`/`master`:
 
 1. **Lint** — `ruff check` + `ruff format --check` (line length 100).
-2. **Unit tests** — full pytest suite (112 tests); Ollama-dependent tests are
+2. **Unit tests** — full pytest suite (121 tests); Ollama-dependent tests are
    marker-deselected in CI (`-m "not ollama"`).
 3. **Docker build** — verifies the image builds and healthchecks pass.
 
@@ -241,7 +272,7 @@ app/                 # FastAPI service
   services/          # container (DI), query service, ingest service
   agents/            # LLM client, researcher agent
 ingestion/
-  parsers/           # pdf, docx, url
+  parsers/           # pdf, docx, txt, url
   chunkers/          # semantic chunker + size config
   embedders/         # Ollama embedder (retries, health), nomic facade
   ingest.py          # run_ingestion() pipeline
@@ -255,7 +286,7 @@ scripts/
   seed.py            # index documents / built-in demo corpus
   eval.py            # gold-set evaluation
   smoke_test.py      # live end-to-end API verification
-tests/               # 112 unit tests
+tests/               # 121 unit tests
 Dockerfile           # production image
 docker-compose.yml   # api + ollama + models-init
 .github/workflows/   # CI: lint → test → docker

@@ -1,0 +1,98 @@
+Enterprise RAG Platform - Product Guide
+
+Overview
+
+The Enterprise RAG Platform is a production-grade retrieval-augmented generation system.
+It ingests PDF, DOCX, TXT, Markdown and CSV files, converts them into searchable chunks,
+embeds them locally, and answers questions grounded strictly in the uploaded content.
+The system never answers from the model's general knowledge; every answer cites the exact
+passages it was built from, so users can verify the reasoning behind each response.
+
+The platform is built with Python 3.10, FastAPI, LlamaIndex, ChromaDB, BM25Okapi, and
+sentence-transformers, and it runs entirely on your own infrastructure. There is no data
+egress: documents, embeddings, and answers stay inside your network.
+
+Architecture
+
+The pipeline has three stages. First, the ingestion stage parses the uploaded file,
+splits it into semantic chunks using a sentence boundary splitter with configurable token
+sizes, and embeds each chunk with a local embedding model. Second, the retrieval stage
+combines two independent search methods into one ranked list. Third, the generation stage
+builds a grounded prompt and produces the final answer.
+
+Ingestion supports four document formats: PDF, DOCX, plain text, and URLs. Every uploaded
+file is staged in a private directory, parsed, chunked, embedded, and then removed, so raw
+files are never kept on disk longer than necessary.
+
+Hybrid Retrieval
+
+Dense retrieval uses ChromaDB with the nomic-embed-text model, which produces
+768-dimensional embedding vectors scored with cosine distance. It captures semantic
+similarity: queries find documents that mean the same thing even when the words differ.
+
+Sparse retrieval uses BM25Okapi, a classical term-frequency algorithm. It excels at exact
+keyword matching and is immune to vocabulary drift in the embedding model.
+
+Both candidate sets are combined using Reciprocal Rank Fusion, or RRF, with a fusion
+constant of 60. RRF merges two ranked lists by combining reciprocal ranks rather than raw
+scores, which makes the fusion robust to score scale differences between the dense and
+sparse components. The top fused candidates are then passed to a cross-encoder reranker.
+
+Re-ranking
+
+A cross-encoder model (ms-marco-MiniLM-L-6-v2) scores each query-document pair jointly,
+which is far more accurate than comparing pre-computed vectors, though it is too expensive
+to run over the whole corpus. The reranker therefore reorders only the top fused
+candidates, trading a little latency for a large precision gain. Re-ranking is optional and
+can be disabled through configuration when latency is more important than precision.
+
+Answer Generation
+
+The researcher agent assembles the top reranked passages into a prompt and calls a chat
+model, by default Ollama running llama3. The model is instructed to answer using only the
+provided context and to cite the source passages inline with bracket numbers such as [1]
+and [2]. If the chat model is unreachable, the agent degrades to an extractive fallback
+that returns the most relevant sentences verbatim, so the service keeps answering even when
+the LLM is down.
+
+Configuration and Deployment
+
+All behavior is driven by environment variables; the same codebase runs locally, in CI,
+and in production without modification. The default chunk size is 512 tokens with an
+80-token overlap between neighbouring chunks, which preserves context across split points.
+Smaller 256-token chunks favour precision on dense fact sheets, while 1024-token chunks
+favour recall on long documents.
+
+A Docker Compose stack runs the API container alongside an Ollama container. A one-shot
+models-init service pre-pulls the embedding model and the chat model before the API starts,
+so the first user request never waits on a model download. Persisted indexes and models
+live on named Docker volumes.
+
+A GitHub Actions workflow runs on every push to main: it lints the code with ruff, runs the
+full unit test suite of over one hundred tests, and builds the Docker image to prove the
+container is healthy.
+
+Security and Observability
+
+Readiness probes verify that Ollama, ChromaDB, and the BM25 index are all reachable before
+the service accepts traffic; orchestration keeps the container out of rotation while any
+dependency is down. Structured JSON logs include a request identifier on every line so
+traces can be correlated across the retrieval and generation stages. Uploaded files are
+capped at 50 megabytes, validated by extension, staged in a private directory, and removed
+after indexing.
+
+Responses are cached in memory with a time-to-live of ten minutes, so repeated identical
+questions return in milliseconds instead of seconds. The cache automatically expires and
+never grows beyond a fixed number of entries.
+
+Pricing and Support
+
+The Starter plan costs $29 per month and includes 5 gigabytes of storage, 1,000 API calls
+per month, and community support. The Business plan costs $99 per month and includes
+50 gigabytes of storage, 20,000 API calls per month, and priority email support with a
+24-hour response time. The Enterprise plan is custom-priced and includes unlimited storage,
+dedicated infrastructure, SSO authentication, and a named solutions engineer.
+
+Annual billing saves 20 percent on every plan. All plans include a 30-day free trial with
+no credit card required. Enterprises can reach the sales team at sales@enterpriserag.example
+and existing customers can file tickets at support.enterpriserag.example.

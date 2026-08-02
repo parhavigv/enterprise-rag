@@ -89,7 +89,8 @@ class Settings(BaseSettings):
 
     # --- Ingestion ---
     default_chunk_size: str = "512T"
-    allowed_formats: str = "pdf,docx,url"
+    allowed_formats: str = "pdf,docx,txt,url"
+    uploads_dir: str = "./data/uploads"
 
     # --- Persistence for local dev ---
     data_dir: str = "./data"

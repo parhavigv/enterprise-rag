@@ -54,6 +54,7 @@ ignore = ["B008", "SIM117"]
 "tests/*" = ["S101", "E501"]
 "scripts/*" = ["E501"]
 "ingestion/parsers/*" = ["B008"]
+"app/api/routes/ui.py" = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

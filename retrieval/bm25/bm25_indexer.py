@@ -85,6 +85,58 @@ class BM25Indexer:
         )
         return self
 
+    def add(self, nodes) -> BM25Indexer:
+        """Merge ``nodes`` into the persisted index and rebuild.
+
+        Incremental ingestion must never lose previously indexed documents:
+        the existing corpus on disk is loaded, new node ids are appended
+        (deduplicated), and the merged index is rebuilt and atomically saved.
+        """
+        new_texts = [n.text for n in nodes]
+        new_ids = [n.node_id for n in nodes]
+        new_metas = [dict(getattr(n, "metadata", {}) or {}) for n in nodes]
+        if not new_texts:
+            raise ValueError("Cannot merge an empty node list into the BM25 index.")
+
+        existing_ids: list[str] = []
+        existing_texts: list[str] = []
+        existing_metas: list[dict] = []
+        try:
+            payload = _load_payload(self._index_path)
+            existing_ids = list(payload.doc_ids)
+            existing_texts = [payload.doc_texts[i] for i in existing_ids]
+            existing_metas = [payload.doc_metas.get(i, {}) for i in existing_ids]
+        except FileNotFoundError:
+            pass
+
+        seen = set(existing_ids)
+        for node_id, text, meta in zip(new_ids, new_texts, new_metas, strict=False):
+            if node_id not in seen:
+                seen.add(node_id)
+                existing_ids.append(node_id)
+                existing_texts.append(text)
+                existing_metas.append(meta)
+
+        logger.info(
+            "Merging %d chunks into BM25 corpus (%d total) ...",
+            len(new_ids),
+            len(existing_ids),
+        )
+        t0 = time.perf_counter()
+        tokenised = [self._tokeniser(t) for t in existing_texts]
+        payload = _BM25Payload(
+            index=BM25Okapi(tokenised),
+            doc_ids=existing_ids,
+            doc_texts=dict(zip(existing_ids, existing_texts, strict=False)),
+            doc_metas=dict(zip(existing_ids, existing_metas, strict=False)),
+            corpus_hash=_hash_corpus(existing_texts),
+        )
+        _atomic_save(payload, self._index_path)
+        self._payload = payload
+        elapsed = time.perf_counter() - t0
+        print(f"BM25 index rebuilt in {elapsed:.2f}s  |  {len(existing_ids)} chunks")
+        return self
+
     def query(self, query_text: str, top_k: int = 20) -> list[tuple[str, float]]:
         if self._payload is None:
             raise RuntimeError("BM25 index not loaded. Call BM25Indexer.load() or .build() first.")

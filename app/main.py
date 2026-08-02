@@ -10,7 +10,7 @@ from importlib.metadata import version as pkg_version
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import health, ingest, query
+from app.api.routes import health, ingest, query, ui
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import get_logger, setup_logging
@@ -96,12 +96,14 @@ def create_app(settings=None, container: Container | None = None) -> FastAPI:
     app.include_router(health.api_router, prefix=settings.api_prefix)
     app.include_router(query.router, prefix=settings.api_prefix)
     app.include_router(ingest.router, prefix=settings.api_prefix)
+    app.include_router(ui.router)
 
     @app.get("/", include_in_schema=False)
     async def root():
         return {
             "service": "enterprise-rag",
             "version": _app_version(),
+            "ui": "/ui",
             "docs": "/docs",
             "health": "/health",
             "readiness": "/health/ready",

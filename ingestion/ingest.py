@@ -74,14 +74,13 @@ def run_ingestion(
         logger.info("[5/5] Building BM25 index ...")
         idx_path = Path(bm25_index_path or get_settings().bm25_index_path)
         indexer = BM25Indexer(index_path=idx_path)
-        if rebuild_bm25 or not idx_path.exists():
-            indexer.build(nodes, force=rebuild_bm25)
-        else:
-            try:
-                indexer = BM25Indexer.load(index_path=idx_path)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Could not load BM25 index ({}); rebuilding.", e)
-                indexer.build(nodes, force=True)
+        try:
+            indexer = BM25Indexer.load(index_path=idx_path)
+        except FileNotFoundError:
+            logger.info("No existing BM25 index; building from scratch.")
+        except Exception as e:  # noqa: BLE001 - corrupt/outdated index
+            logger.warning("Could not load BM25 index ({}); rebuilding.", e)
+        indexer.add(nodes)
         metrics["bm25_count"] = indexer.count()
 
     except InvalidInputError:
