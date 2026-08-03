@@ -22,10 +22,12 @@ class DenseRetriever:
     def adapter(self) -> ChromaAdapter:
         return self._adapter
 
-    def retrieve(self, query: str, top_k: int = 20) -> list[RetrievedDocument]:
+    def retrieve(
+        self, query: str, top_k: int = 20, where: dict | None = None
+    ) -> list[RetrievedDocument]:
         if not query or not query.strip():
             raise ValueError("Query text must not be empty.")
         if top_k < 1:
             raise ValueError("top_k must be >= 1")
         embedding = self._embedder.embed_query(query)
-        return self._adapter.query(embedding, top_k=top_k)
+        return self._adapter.query(embedding, top_k=top_k, where=where)

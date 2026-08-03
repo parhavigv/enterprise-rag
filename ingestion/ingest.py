@@ -31,8 +31,13 @@ def run_ingestion(
     embedder: OllamaEmbedder | None = None,
     adapter: ChromaAdapter | None = None,
     bm25_index_path: str | None = None,
+    source_name: str | None = None,
 ) -> dict:
     """Run the full ingestion pipeline and return structured metrics.
+
+    ``source_name`` (e.g. the original upload filename) overrides each
+    document's ``metadata["source"]`` so downstream source filtering and
+    citations refer to a human-friendly label.
 
     Raises:
         InvalidInputError: unknown format or unusable source.
@@ -48,6 +53,10 @@ def run_ingestion(
     try:
         logger.info("[1/5] Parsing {} as {} ...", path, fmt)
         docs = PARSERS[fmt](path)
+        if source_name:
+            for doc in docs:
+                doc.metadata["source"] = source_name
+                doc.metadata["filename"] = source_name
         metrics["docs_parsed"] = len(docs)
 
         logger.info("[2/5] Chunking with config={} ...", chunk_size)

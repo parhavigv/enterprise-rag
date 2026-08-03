@@ -135,6 +135,22 @@ class TestBM25Persistence:
         assert indexer.count() == 1
         assert idx_path.exists()
 
+    def test_query_documents_filters_by_source(self, tmp_path):
+        idx_path = tmp_path / "idx.pkl"
+        half = len(SAMPLE_NODES) // 2
+        nodes = [_make_node(t) for t in SAMPLE_TEXTS]
+        for n in nodes[:half]:
+            n.metadata = {"source": "a.txt"}
+        for n in nodes[half:]:
+            n.metadata = {"source": "b.txt"}
+        BM25Indexer(index_path=idx_path).build(nodes)
+        indexer = BM25Indexer.load(index_path=idx_path)
+
+        hits = indexer.query_documents("retrieval algorithm", top_k=10, source="a.txt")
+        assert hits
+        assert all(d.metadata["source"] == "a.txt" for d in hits)
+        assert len(hits) == half  # nothing from b.txt leaks in
+
     def test_add_raises_on_empty_nodes(self, tmp_path):
         indexer = BM25Indexer(index_path=tmp_path / "idx.pkl")
         with pytest.raises(ValueError, match="empty"):

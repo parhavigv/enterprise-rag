@@ -32,6 +32,7 @@ class IngestService:
         chunk_size: str = "512T",
         collection_name: str = "enterprise_rag",
         rebuild_bm25: bool = False,
+        source_name: str | None = None,
     ) -> dict:
         self._last_error = None
         metrics = run_ingestion(
@@ -40,6 +41,7 @@ class IngestService:
             chunk_size=chunk_size,
             collection_name=collection_name,
             rebuild_bm25=rebuild_bm25,
+            source_name=source_name,
         )
         self._last_metrics = metrics
         return metrics
@@ -51,6 +53,7 @@ class IngestService:
         chunk_size: str = "512T",
         collection_name: str = "enterprise_rag",
         rebuild_bm25: bool = False,
+        source_name: str | None = None,
     ) -> Callable[[], None]:
         """Return a zero-arg callable for FastAPI ``BackgroundTasks``."""
 
@@ -62,6 +65,7 @@ class IngestService:
                     chunk_size=chunk_size,
                     collection_name=collection_name,
                     rebuild_bm25=rebuild_bm25,
+                    source_name=source_name,
                 )
                 logger.info("Background ingestion finished | path={}", path)
             except Exception as e:  # noqa: BLE001 - background jobs must not crash the worker

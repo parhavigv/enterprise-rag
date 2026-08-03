@@ -25,6 +25,11 @@ def _default_tokeniser(text: str) -> list[str]:
     return text.split()
 
 
+def _source_matches(actual: object, expected: str) -> bool:
+    """Exact (case-insensitive) match on the chunk's metadata source."""
+    return str(actual or "").lower() == str(expected).lower()
+
+
 class _BM25Payload:
     __slots__ = ("index", "doc_ids", "doc_texts", "doc_metas", "corpus_hash", "created_at")
 
@@ -150,21 +155,42 @@ class BM25Indexer:
         )
         return scored[:top_k]
 
-    def query_documents(self, query_text: str, top_k: int = 20) -> list[RetrievedDocument]:
-        """Query and hydrate sparse hits into ``RetrievedDocument`` objects."""
-        results = self.query(query_text, top_k=top_k)
+    def query_documents(
+        self,
+        query_text: str,
+        top_k: int = 20,
+        source: str | None = None,
+    ) -> list[RetrievedDocument]:
+        """Query and hydrate sparse hits into ``RetrievedDocument`` objects.
+
+        When ``source`` is given, only chunks whose ``metadata["source"]``
+        matches are returned (exact, case-insensitive match). A larger
+        candidate pool is scored so filtering cannot starve the top-k.
+        """
+        if source:
+            pool = max(100, top_k * 10)
+            results = self.query(query_text, top_k=pool)
+        else:
+            results = self.query(query_text, top_k=top_k)
+
         out: list[RetrievedDocument] = []
         for doc_id, score in results:
-            if doc_id in self._payload.doc_texts:
-                out.append(
-                    RetrievedDocument(
-                        node_id=doc_id,
-                        text=self._payload.doc_texts[doc_id],
-                        score=float(score),
-                        metadata=self._payload.doc_metas.get(doc_id, {}),
-                        source="sparse",
-                    )
+            if doc_id not in self._payload.doc_texts:
+                continue
+            meta = self._payload.doc_metas.get(doc_id, {})
+            if source and not _source_matches(meta.get("source"), source):
+                continue
+            out.append(
+                RetrievedDocument(
+                    node_id=doc_id,
+                    text=self._payload.doc_texts[doc_id],
+                    score=float(score),
+                    metadata=meta,
+                    source="sparse",
                 )
+            )
+            if len(out) >= top_k:
+                break
         return out
 
     def document_text(self, doc_id: str) -> str | None:

@@ -66,7 +66,15 @@ PAGE = r"""<!DOCTYPE html>
   .card-h { padding:14px 18px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:10px; }
   .card-h h2 { margin:0; font-size:13px; font-weight:700; color:var(--ink); letter-spacing:.04em; text-transform:uppercase; }
   .card-h .tag { margin-left:auto; font-size:11.5px; color:var(--muted); }
+  select.scope { margin-left:auto; appearance:none; border:1px solid var(--border-2); background:var(--surface);
+    color:var(--ink); font:inherit; font-size:12px; font-weight:600; padding:5px 22px 5px 10px; border-radius:6px;
+    cursor:pointer; max-width:190px; }
   .card-b { padding:16px 18px; }
+  .fld { display:block; margin-bottom:11px; font-size:12px; font-weight:600; color:var(--muted); }
+  .fld select,.fld input { display:block; width:100%; margin-top:4px; font:inherit; font-weight:500; color:var(--ink);
+    background:var(--surface); border:1px solid var(--border-2); border-radius:var(--radius-sm); padding:8px 10px; }
+  .fld select:focus,.fld input:focus { outline:2px solid #bfdbfe; border-color:var(--brand); }
+  .mini-hint { font-size:11.5px; color:var(--muted); margin-top:6px; }
 
   /* ---------- upload ---------- */
   .drop { border:1.5px dashed var(--border-2); border-radius:var(--radius); padding:22px 16px; text-align:center;
@@ -170,7 +178,9 @@ PAGE = r"""<!DOCTYPE html>
 <main class="layout">
   <!-- chat column -->
   <section class="card">
-    <div class="card-h"><h2>Ask your documents</h2><span class="tag" id="chatMeta"></span></div>
+    <div class="card-h"><h2>Ask your documents</h2>
+      <select id="scope" class="scope" title="Restrict answers to one document"><option value="">All documents</option></select>
+      <span class="tag" id="chatMeta"></span></div>
     <div class="chat">
       <div class="messages" id="messages">
         <div class="empty-chat" id="empty">
@@ -213,6 +223,7 @@ PAGE = r"""<!DOCTYPE html>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
           Upload &amp; index
         </button>
+        <button class="btn ghost" id="reviewBtn" style="width:100%;justify-content:center;margin-top:8px;display:none">Review this document</button>
         <div class="status" id="uploadStatus"></div>
       </div>
     </section>
@@ -221,6 +232,27 @@ PAGE = r"""<!DOCTYPE html>
       <div class="card-h"><h2>Sources</h2><span class="tag" id="srcCount"></span></div>
       <div class="card-b" id="sources" style="max-height:420px;overflow-y:auto">
         <div class="status info" id="srcEmpty">No sources yet — ask a question to see the retrieved passages.</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-h"><h2>Answer engine</h2><span class="tag" id="engineTag">…</span></div>
+      <div class="card-b">
+        <label class="fld">Provider
+          <select id="setProvider">
+            <option value="ollama">Ollama (local)</option>
+            <option value="openai">OpenAI (GPT)</option>
+          </select>
+        </label>
+        <label class="fld">Model
+          <input id="setModel" type="text" placeholder="llama3 or gpt-4o" autocomplete="off">
+        </label>
+        <label class="fld">API key
+          <input id="setKey" type="password" placeholder="sk-… (blank keeps current)" autocomplete="off">
+        </label>
+        <button class="btn ghost" id="applySet" style="width:100%;justify-content:center;margin-top:4px">Apply settings</button>
+        <div class="status" id="setStatus"></div>
+        <div class="mini-hint">Connect an OpenAI key for richer, explained answers — no server restart needed.</div>
       </div>
     </section>
 
@@ -247,6 +279,8 @@ const MODELS = [
 ];
 let pendingImages = [];      // data URIs
 let pendingFile = null;
+let lastSource = '';         // metadata source of the most recent upload
+let lastSourceLabel = '';
 let recording = null;        // MediaRecorder
 let recordedChunks = [];
 
@@ -316,6 +350,9 @@ $('uploadBtn').addEventListener('click', async () => {
     $('uploadStatus').className = 'status ok';
     $('uploadStatus').innerHTML = '✓ Indexed ' + (m.chunks || '?') + ' chunk(s)<table class="metrics">' + rows + '</table>';
     $('upStat').textContent = 'indexed';
+    lastSource = m.filename || '';
+    lastSourceLabel = lastSource;
+    if (lastSource) { scopeOptions(); $('scope').value = lastSource; $('reviewBtn').style.display = ''; }
     toast('Document indexed — ask away.', 'ok');
   } catch (e) {
     $('uploadStatus').className = 'status err';
@@ -361,7 +398,7 @@ $('micBtn').addEventListener('click', async () => {
     recording.ondataavailable = e => { if (e.data.size) recordedChunks.push(e.data); };
     recording.onstop = async () => {
       recording = null; $('micBtn').classList.remove('rec');
-      const blob = new Blob(recordedChunks, { type: recording ? 'audio/webm' : 'audio/webm' });
+      const blob = new Blob(recordedChunks, { type: 'audio/webm' });
       stream.getTracks().forEach(t => t.stop());
       await transcribe(blob);
     };
@@ -415,22 +452,33 @@ function typing(show) {
   } else if (!show && el) el.remove();
 }
 function renderSources(srch) {
+  const empty = $('srcEmpty');
+  if (empty) empty.style.display = 'none';
+  if (!srch || !srch.length) {
+    $('srcCount').textContent = '0 hits';
+    $('sources').innerHTML = '<div class="status info" id="srcEmpty">No relevant passages retrieved — the answer may not be grounded.</div>';
+    return;
+  }
   $('srcCount').textContent = srch.length + ' hits';
-  $('srcEmpty').style.display = 'none';
-  $('sources').innerHTML = srch.map((s,i) => `
+  $('sources').innerHTML = srch.map((s,i) => {
+    const fname = (s.metadata && (s.metadata.filename || s.metadata.source))
+      ? String(s.metadata.filename || s.metadata.source).split(/[\\/]/).pop() : '';
+    return `
     <div style="padding:9px 10px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;margin-bottom:8px">
       <div style="font-size:11px;color:var(--muted);margin-bottom:4px">
         <b style="color:var(--brand-dark)">score ${Number(s.score).toFixed(3)}</b>
-        · ${esc(s.source||'hybrid')}${s.metadata && s.metadata.page_number ? ' · p.' + s.metadata.page_number : ''}
+        · ${esc(s.source||'hybrid')}${fname ? ' · <span style="color:var(--text)">' + esc(fname) + '</span>' : ''}${s.metadata && s.metadata.page_number ? ' · p.' + s.metadata.page_number : ''}
       </div>
       <div style="font-size:12px;color:var(--text);white-space:pre-wrap;word-break:break-word">${esc(s.text.length>420 ? s.text.slice(0,420)+'…' : s.text)}</div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 async function ask() {
   const q = $('q').value.trim();
   if (!q && !pendingImages.length) return;
   const chosen = $('model').value.split('::');
   const provider = chosen[0], model = chosen[1];
+  const source = $('scope').value || null;
   const images = pendingImages.slice();
   appendMsg('user', esc(q), { images });
   pendingImages = []; renderAttachments(); $('q').value = '';
@@ -440,6 +488,7 @@ async function ask() {
   try {
     const body = { query: q, top_k: 5, provider, model };
     if (images.length) body.images = images;
+    if (source) body.source = source;
     const r = await fetch('/api/v1/query', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     });
@@ -450,9 +499,10 @@ async function ask() {
       ? j.search.map((s,i) => `<span class="cite" onclick="toggleSrc(${i})">[${i+1}]</span>`).join('')
       : '';
     appendMsg('assistant', esc(j.answer || '(no answer)'), { meta: cites });
-    if (j.search && j.search.length) renderSources(j.search);
+    if (j.search) renderSources(j.search);
     $('meta').textContent = 'model: ' + (j.model || '—') + ' · generated: ' + j.generated +
-      ' · latency: ' + (j.latency_ms/1000).toFixed(1) + 's · cache: ' + j.cache_hit;
+      ' · latency: ' + (j.latency_ms/1000).toFixed(1) + 's · cache: ' + j.cache_hit +
+      (source ? ' · scope: ' + source : '');
     $('chatMeta').textContent = 'answered';
   } catch (e) {
     typing(false);
@@ -464,12 +514,68 @@ function toggleSrc(i) {
   const cards = $('sources').querySelectorAll('div[style*="background:#f8fafc"]');
   if (cards[i]) cards[i].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
+
+/* ---------------- document scope ---------------- */
+function scopeOptions() {
+  const sel = $('scope');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">All documents</option>';
+  if (lastSource) {
+    const o = document.createElement('option');
+    o.value = lastSource;
+    o.textContent = '\u21a6 ' + lastSourceLabel;
+    sel.appendChild(o);
+  }
+  if (prev && Array.from(sel.options).some(o => o.value === prev)) sel.value = prev;
+}
+
+/* ---------------- answer engine settings ---------------- */
+async function loadSettings() {
+  try {
+    const r = await fetch('/api/v1/settings');
+    const j = await r.json();
+    if (!r.ok) throw new Error('settings unavailable');
+    $('setProvider').value = j.provider || 'ollama';
+    $('setModel').value = j.model || '';
+    $('engineTag').textContent = j.api_key_masked ? 'key set' : 'no API key';
+  } catch (e) { $('engineTag').textContent = 'unavailable'; }
+}
+$('applySet').addEventListener('click', async () => {
+  const btn = $('applySet'); btn.disabled = true;
+  $('setStatus').className = 'status info';
+  $('setStatus').textContent = 'Applying…';
+  try {
+    const body = { provider: $('setProvider').value };
+    const model = $('setModel').value.trim();
+    if (model) body.model = model;
+    const key = $('setKey').value.trim();
+    if (key) body.api_key = key;
+    const r = await fetch('/api/v1/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error ? j.error.message : 'Update failed');
+    $('setStatus').className = 'status ok';
+    $('setStatus').textContent = 'Saved: ' + j.provider + ' \u00b7 ' + j.model;
+    $('engineTag').textContent = j.api_key_masked ? 'key set' : 'no API key';
+    $('setKey').value = '';
+    toast('Answer engine updated — next question uses ' + j.model, 'ok');
+  } catch (e) {
+    $('setStatus').className = 'status err';
+    $('setStatus').textContent = '\u2717 ' + e.message;
+  } finally { btn.disabled = false; }
+});
+$('reviewBtn').addEventListener('click', () => {
+  $('q').value = 'Review this document: give an overview, its strengths, gaps or risks, and concrete recommendations.';
+  ask();
+});
+
 $('askBtn').addEventListener('click', ask);
 $('q').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); }
 });
 
-loadModels(); health(); setInterval(health, 15000);
+loadModels(); loadSettings(); health(); setInterval(health, 15000);
 </script>
 </body>
 </html>

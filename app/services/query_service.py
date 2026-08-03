@@ -64,11 +64,17 @@ class QueryService:
         """Cheap readiness check - the retriever must have an index."""
         return self._hybrid.is_ready()
 
-    def search(self, query: str, top_k: int | None = None, rerank: bool = True) -> QueryResult:
+    def search(
+        self,
+        query: str,
+        top_k: int | None = None,
+        rerank: bool = True,
+        source: str | None = None,
+    ) -> QueryResult:
         """Retrieve (and optionally re-rank) top-k documents."""
         t0 = time.perf_counter()
         top_k = top_k or self._default_final_top_k
-        docs = self._retrieve(query, top_k, rerank)
+        docs = self._retrieve(query, top_k, rerank, source=source)
         return QueryResult(
             query=query,
             search=[d.to_dict() for d in docs],
@@ -86,18 +92,19 @@ class QueryService:
         images: list[str] | None = None,
         provider: str | None = None,
         model: str | None = None,
+        source: str | None = None,
     ) -> QueryResult:
         """Full RAG: retrieve, re-rank, and generate a grounded answer.
 
         ``researcher`` overrides the memoised agent (used for per-request
         provider/model overrides); ``images`` are attached to the LLM call as
-        vision content blocks; ``provider`` / ``model`` only affect the cache
-        key so switching models never reuses a stale cached answer.
+        vision content blocks; ``provider`` / ``model`` / ``source`` only
+        affect the cache key so switching scope never reuses stale answers.
         """
         t0 = time.perf_counter()
         top_k = top_k or self._default_final_top_k
 
-        cache_key = self._cache_key(query, top_k, rerank, generate, provider, model, images)
+        cache_key = self._cache_key(query, top_k, rerank, generate, provider, model, images, source)
         if self._cache is not None:
             cached = self._cache.get(cache_key)
             if cached is not None:
@@ -105,7 +112,7 @@ class QueryService:
                 logger.info("Cache hit for query | key={}", cache_key)
                 return QueryResult(**cached)
 
-        docs = self._retrieve(query, top_k, rerank)
+        docs = self._retrieve(query, top_k, rerank, source=source)
 
         if generate:
             agent = researcher or self._researcher
@@ -137,7 +144,13 @@ class QueryService:
     # ------------------------------------------------------------------ #
     # Internal
     # ------------------------------------------------------------------ #
-    def _retrieve(self, query: str, top_k: int, rerank: bool) -> list[RetrievedDocument]:
+    def _retrieve(
+        self,
+        query: str,
+        top_k: int,
+        rerank: bool,
+        source: str | None = None,
+    ) -> list[RetrievedDocument]:
         if not self.is_ready():
             raise RetrieverNotReadyError()
         docs = self._hybrid.retrieve(
@@ -145,6 +158,7 @@ class QueryService:
             top_k=self._hybrid_top_k,
             dense_k=self._dense_top_k,
             sparse_k=self._sparse_top_k,
+            source=source,
         )
         if rerank and self._reranker is not None and docs:
             docs = self._reranker.rerank_documents(query, docs, top_k=top_k)
@@ -161,7 +175,8 @@ class QueryService:
         provider: str | None = None,
         model: str | None = None,
         images: list[str] | None = None,
+        source: str | None = None,
     ) -> str:
         image_count = len(images) if images else 0
-        model_scope = f"{provider}|{model}|img{image_count}"
+        model_scope = f"{provider}|{model}|img{image_count}|src{source}"
         return f"{query.strip().lower()}|{top_k}|{rerank}|{generate}|{model_scope}"

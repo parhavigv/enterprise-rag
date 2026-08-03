@@ -29,7 +29,25 @@ class _FakeContainer:
         self.settings = SimpleNamespace(
             uploads_dir="./data/uploads",
             chroma_collection="enterprise_rag",
+            llm_provider="ollama",
+            llm_model="llama3.1",
+            llm_base_url="http://localhost:11434/v1",
+            llm_api_key="ollama",
+            openai_base_url="https://api.openai.com/v1",
+            openai_api_key="",
+            whisper_model="whisper-1",
         )
+
+    def update_llm_settings(self, *, provider=None, model=None, api_key=None) -> None:
+        if provider:
+            self.settings.llm_provider = provider
+        if model:
+            self.settings.llm_model = model
+        if api_key:
+            if self.settings.llm_provider == "openai":
+                self.settings.openai_api_key = api_key
+            else:
+                self.settings.llm_api_key = api_key
 
     def adapter(self):
         return _HealthyProbe()
@@ -77,7 +95,7 @@ class _FakeQueryService:
             latency_ms=1.5,
         )
 
-    def search(self, query, top_k=5, rerank=True):
+    def search(self, query, top_k=5, rerank=True, source=None):
         return QueryResult(
             query=query,
             search=[
@@ -199,6 +217,39 @@ def test_query_with_images_passes_through(client):
     r = client.post("/api/v1/query", json={"query": "what is in the image?", "images": [img]})
     assert r.status_code == 200
     assert client.app.state.fake_query_service.last_answer_kwargs["images"] == [img]
+
+
+def test_query_with_source_passes_through(client):
+    r = client.post("/api/v1/query", json={"query": "review my resume", "source": "resume.pdf"})
+    assert r.status_code == 200
+    assert client.app.state.fake_query_service.last_answer_kwargs["source"] == "resume.pdf"
+
+
+def test_settings_get_returns_current_config(client):
+    r = client.get("/api/v1/settings")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["provider"] == "ollama"
+    assert body["model"] == "llama3.1"
+    assert body["api_key_masked"] is None
+    assert "providers" in body and "openai" in body["providers"]
+
+
+def test_settings_put_updates_runtime_config(client):
+    r = client.put(
+        "/api/v1/settings",
+        json={"provider": "openai", "model": "gpt-4o", "api_key": "sk-live-123"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["provider"] == "openai"
+    assert body["model"] == "gpt-4o"
+    assert body["api_key_masked"] is not None
+
+
+def test_settings_put_invalid_provider_422(client):
+    r = client.put("/api/v1/settings", json={"provider": "gemini"})
+    assert r.status_code == 422
 
 
 def test_query_invalid_provider_422(client):

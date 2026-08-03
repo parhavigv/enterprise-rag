@@ -56,3 +56,26 @@ def test_researcher_for_binds_provider_and_model():
     researcher = container.researcher_for(provider="openai", model="gpt-4o-mini")
     assert researcher._llm.provider == "openai"
     assert researcher._llm.model == "gpt-4o-mini"
+
+
+def test_update_llm_settings_switches_provider_and_model():
+    container = Container(_settings())
+    container.update_llm_settings(provider="openai", model="gpt-4o-mini", api_key="sk-live")
+    client = container.llm_client()  # rebuilt from the new defaults
+    assert client.provider == "openai"
+    assert client.model == "gpt-4o-mini"
+    assert client._api_key == "sk-live"
+
+
+def test_update_llm_settings_ollama_key_stored_separately():
+    container = Container(_settings())
+    container.update_llm_settings(api_key="local-key")
+    assert container.settings.llm_api_key == "local-key"
+    assert container.settings.openai_api_key == ""
+
+
+def test_update_llm_settings_drops_memoised_researcher():
+    container = Container(_settings())
+    first = container.researcher()
+    container.update_llm_settings(model="gpt-4o")
+    assert container.researcher() is not first

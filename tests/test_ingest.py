@@ -91,6 +91,27 @@ def test_run_ingestion_incremental_bm25_merge(tmp_path, monkeypatch):
     assert first["bm25_count"] == first["chunks"]
 
 
+def test_run_ingestion_stamps_source_name_metadata(tmp_path, monkeypatch):
+    monkeypatch.setitem(ingest_mod.PARSERS, "pdf", _fake_parser)
+    adapter = _FakeAdapter()
+    ingest_mod.run_ingestion(
+        path="fake.pdf",
+        fmt="pdf",
+        chunk_size="512T",
+        collection_name="test",
+        embedder=_FakeEmbedder(),
+        adapter=adapter,
+        bm25_index_path=str(tmp_path / "bm25.pkl"),
+        source_name="parhavi intern.pdf",
+    )
+    assert adapter.upserted
+    assert all(
+        n.metadata["source"] == "parhavi intern.pdf"
+        and n.metadata["filename"] == "parhavi intern.pdf"
+        for n in adapter.upserted
+    )
+
+
 def test_run_ingestion_invalid_format(tmp_path):
     from app.core.errors import InvalidInputError
 

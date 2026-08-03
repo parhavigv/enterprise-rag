@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import health, ingest, query, speech, ui
+from app.api.routes import settings as settings_routes
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import get_logger, setup_logging
@@ -97,6 +98,7 @@ def create_app(settings=None, container: Container | None = None) -> FastAPI:
     app.include_router(query.router, prefix=settings.api_prefix)
     app.include_router(ingest.router, prefix=settings.api_prefix)
     app.include_router(speech.router, prefix=settings.api_prefix)
+    app.include_router(settings_routes.router, prefix=settings.api_prefix)
     app.include_router(ui.router)
 
     @app.get("/", include_in_schema=False)

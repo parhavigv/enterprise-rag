@@ -32,11 +32,12 @@ async def query(
         images=req.images,
         provider=req.provider,
         model=req.model,
+        source=req.source,
     )
     return QueryResponse(**asdict(result))
 
 
 @router.post("/search", response_model=QueryResponse, summary="Retrieve documents only")
 def search(req: QueryRequest, service: QueryService = Depends(get_query_service)) -> QueryResponse:
-    result = service.search(query=req.query, top_k=req.top_k, rerank=req.rerank)
+    result = service.search(query=req.query, top_k=req.top_k, rerank=req.rerank, source=req.source)
     return QueryResponse(**asdict(result))

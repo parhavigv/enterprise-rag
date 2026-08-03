@@ -17,6 +17,11 @@ class QueryRequest(BaseModel):
     generate: bool = Field(True, description="Generate a grounded LLM answer")
     provider: str | None = Field(None, description="LLM provider override: ollama | openai")
     model: str | None = Field(None, description="Model override, e.g. gpt-4o or llama3")
+    source: str | None = Field(
+        None,
+        max_length=512,
+        description="Restrict retrieval to chunks whose metadata source matches this file",
+    )
     images: list[str] | None = Field(
         None,
         max_length=4,
@@ -50,6 +55,14 @@ class QueryRequest(BaseModel):
                 raise ValueError("each image must be at most ~10 MB")
             cleaned.append(image.strip())
         return cleaned or None
+
+    @field_validator("source")
+    @classmethod
+    def _strip_source(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        return v or None
 
 
 class SourceModel(BaseModel):
@@ -133,3 +146,29 @@ class TranscribeResponse(BaseModel):
     text: str = Field("", description="Transcribed text from the uploaded audio")
     model: str = Field("whisper-1", description="Transcription model used")
     duration_ms: float = Field(0.0, description="Round-trip transcription latency")
+
+
+# --------------------------------------------------------------------- #
+# Runtime settings
+# --------------------------------------------------------------------- #
+class SettingsUpdate(BaseModel):
+    provider: str | None = Field(None, description="LLM provider: ollama | openai")
+    model: str | None = Field(None, max_length=128, description="Default model name")
+    api_key: str | None = Field(
+        None, max_length=512, description="API key; blank keeps the current key"
+    )
+
+    @field_validator("provider")
+    @classmethod
+    def _validate_provider(cls, v: str | None) -> str | None:
+        if v is not None and v not in {"ollama", "openai"}:
+            raise ValueError("provider must be one of: ollama, openai")
+        return v
+
+    @field_validator("model")
+    @classmethod
+    def _strip_model(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        return v or None

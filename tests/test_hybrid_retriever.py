@@ -17,16 +17,20 @@ def _doc(node_id: str, text: str, score: float = 0.5, source: str = "dense") -> 
 class _FakeDense:
     def __init__(self, hits) -> None:
         self._hits = hits
+        self.calls = []
 
-    def retrieve(self, query, top_k: int = 50):
+    def retrieve(self, query, top_k: int = 50, where: dict | None = None):
+        self.calls.append((query, top_k, where))
         return self._hits[:top_k]
 
 
 class _FakeSparse:
     def __init__(self, hits) -> None:
         self._hits = hits
+        self.calls = []
 
-    def query_documents(self, query, top_k: int = 50):
+    def query_documents(self, query, top_k: int = 50, source: str | None = None):
+        self.calls.append((query, top_k, source))
         return self._hits[:top_k]
 
 
@@ -81,8 +85,19 @@ def test_retrieve_calls_retrievers_with_kwargs():
     sparse = _FakeSparse(SPARSE)
     hybrid = HybridRetriever(dense=dense, sparse=sparse)
     hybrid.retrieve("q", top_k=5, dense_k=3, sparse_k=2)
-    # Can't introspect directly without recording; just assert it runs.
-    assert True
+    assert dense.calls[0][:2] == ("q", 3)
+    assert sparse.calls[0][:2] == ("q", 2)
+    assert dense.calls[0][2] is None  # no filter by default
+    assert sparse.calls[0][2] is None
+
+
+def test_retrieve_passes_source_filter_to_both_rankers():
+    dense = _FakeDense(DENSE)
+    sparse = _FakeSparse(SPARSE)
+    hybrid = HybridRetriever(dense=dense, sparse=sparse)
+    hybrid.retrieve("q", top_k=5, source="report.pdf")
+    assert dense.calls[0][2] == {"source": "report.pdf"}
+    assert sparse.calls[0][2] == "report.pdf"
 
 
 def test_rrf_k_must_be_positive():

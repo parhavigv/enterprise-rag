@@ -115,6 +115,7 @@ base64 images that are sent to the model alongside the question).
   "generate": true,  // LLM answer; false → retrieval only
   "provider": "openai",   // optional override: ollama | openai
   "model": "gpt-4o",      // optional override, e.g. gpt-4o / gpt-4.1 / llama3
+  "source": "resume.pdf", // optional: restrict retrieval to one uploaded file
   "images": ["data:image/png;base64,..."]   // optional vision input (max 4)
 }
 
@@ -183,11 +184,36 @@ curl -X POST http://127.0.0.1:8000/api/v1/upload ^
 ### `GET /ui`
 Modern browser workspace (no build step): drag-and-drop upload, chat with
 sources, **attach images** for vision chat, a **record-your-voice** mic button
-(Whisper), and a model picker that can switch between Ollama and OpenAI
-per question.
+(Whisper), and a **scope selector** that answers from a single uploaded file
+("Review this document" runs a structured Overview / Strengths / Gaps & risks /
+Recommendations / Bottom line analysis). The **Answer engine** card changes
+provider / model / API key at runtime, exactly like `PUT /api/v1/settings`.
 
 ### `GET /api/v1/stats`
 Index statistics: Chroma collection + count, BM25 path + count, active embed/LLM models.
+
+### `GET` / `PUT /api/v1/settings`
+Runtime answer-engine configuration — switch provider / model / API key **without
+a server restart**. `PUT` accepts any subset of `{provider, model, api_key}` and
+immediately affects the next question (memoised LLM clients are rebuilt).
+
+```bash
+curl -X PUT http://127.0.0.1:8000/api/v1/settings ^
+  -H "Content-Type: application/json" ^
+  -d '{"provider": "openai", "model": "gpt-4o", "api_key": "sk-..."}'
+```
+
+```jsonc
+// GET response
+{
+  "provider": "openai",
+  "model": "gpt-4o",
+  "base_url": "https://api.openai.com/v1",
+  "api_key_masked": "sk-…123",        // null when no key is configured
+  "whisper_model": "whisper-1",
+  "providers": { "ollama": ["llama3", ...], "openai": ["gpt-4o", ...] }
+}
+```
 
 ### Health
 - `GET /health` — liveness (always 200 when the process is up).

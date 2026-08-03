@@ -50,14 +50,16 @@ class HybridRetriever:
         top_k: int = 20,
         dense_k: int = 50,
         sparse_k: int = 50,
+        source: str | None = None,
     ) -> list[RetrievedDocument]:
         if not query or not query.strip():
             raise ValueError("Query text must not be empty.")
         if top_k < 1:
             raise ValueError("top_k must be >= 1")
 
-        dense_hits = self._dense.retrieve(query, top_k=dense_k)
-        sparse_hits = self._sparse.query_documents(query, top_k=sparse_k)
+        where = {"source": source} if source else None
+        dense_hits = self._dense.retrieve(query, top_k=dense_k, where=where)
+        sparse_hits = self._sparse.query_documents(query, top_k=sparse_k, source=source)
 
         fused = self.fuse(dense_hits, sparse_hits, top_k=top_k)
         for doc in fused:

@@ -146,6 +146,28 @@ class Container:
             llm=self.llm_client(provider, model), max_context_docs=self._settings.final_top_k
         )
 
+    def update_llm_settings(
+        self, *, provider: str | None = None, model: str | None = None, api_key: str | None = None
+    ) -> None:
+        """Apply runtime LLM settings changes (no restart needed).
+
+        Mutates the shared ``Settings`` instance and drops the memoised LLM
+        client / researcher so the next query picks up the new defaults.
+        """
+        s = self._settings
+        if provider:
+            s.llm_provider = provider
+        if model:
+            s.llm_model = model
+        if api_key:
+            if s.llm_provider == "openai":
+                s.openai_api_key = api_key
+            else:
+                s.llm_api_key = api_key
+        self._cache.pop("llm", None)
+        self._cache.pop("researcher", None)
+        logger.info("LLM settings updated | provider={} | model={}", s.llm_provider, s.llm_model)
+
     # ------------------------------------------------------------------ #
     # Services
     # ------------------------------------------------------------------ #

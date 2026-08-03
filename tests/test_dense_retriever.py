@@ -26,8 +26,10 @@ class _FakeAdapter:
         self._docs = docs or []
         self.query_calls = []
 
-    def query(self, embedding, top_k: int = 20) -> list[RetrievedDocument]:
-        self.query_calls.append((embedding, top_k))
+    def query(
+        self, embedding, top_k: int = 20, where: dict | None = None
+    ) -> list[RetrievedDocument]:
+        self.query_calls.append((embedding, top_k, where))
         return self._docs[:top_k]
 
 
@@ -45,8 +47,17 @@ def test_retrieve_embeds_and_queries():
     out = retriever.retrieve("alpha query", top_k=5)
 
     assert len(out) == 2
-    assert adapter.query_calls == [([0.1, 0.1, 0.1, 0.1], 5)]
+    assert adapter.query_calls == [([0.1, 0.1, 0.1, 0.1], 5, None)]
     assert out[0].node_id == "a"
+
+
+def test_retrieve_forwards_metadata_filter():
+    adapter = _FakeAdapter([_doc("a", "alpha")])
+    retriever = DenseRetriever(adapter=adapter, embedder=_FakeEmbedder())
+
+    retriever.retrieve("alpha query", top_k=5, where={"source": "x.pdf"})
+
+    assert adapter.query_calls == [([0.1, 0.1, 0.1, 0.1], 5, {"source": "x.pdf"})]
 
 
 def test_retrieve_respects_top_k():

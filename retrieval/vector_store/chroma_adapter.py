@@ -99,19 +99,31 @@ class ChromaAdapter:
     # ------------------------------------------------------------------ #
     # Read path
     # ------------------------------------------------------------------ #
-    def query(self, embedding: list[float], top_k: int = 20) -> list[RetrievedDocument]:
-        """Top-k cosine similarity search, returning typed hits."""
+    def query(
+        self,
+        embedding: list[float],
+        top_k: int = 20,
+        where: dict | None = None,
+    ) -> list[RetrievedDocument]:
+        """Top-k cosine similarity search, returning typed hits.
+
+        ``where`` is a ChromaDB metadata filter (e.g. ``{"source": "x.pdf"}``)
+        used to scope retrieval to a single document.
+        """
         if not embedding:
             raise ValueError("Query embedding is empty")
         if top_k < 1:
             raise ValueError("top_k must be >= 1")
 
         try:
-            results = self.col.query(
-                query_embeddings=[embedding],
-                n_results=top_k,
-                include=["documents", "metadatas", "distances"],
-            )
+            kwargs: dict = {
+                "query_embeddings": [embedding],
+                "n_results": top_k,
+                "include": ["documents", "metadatas", "distances"],
+            }
+            if where:
+                kwargs["where"] = where
+            results = self.col.query(**kwargs)
         except Exception as e:  # noqa: BLE001
             logger.error("ChromaDB query failed: {}", e)
             raise RuntimeError(f"Query failed: {e}") from e

@@ -119,6 +119,7 @@ async def upload(
             chunk_size=chunk_size,
             collection_name=settings.chroma_collection,
             rebuild_bm25=rebuild_bm25,
+            source_name=file.filename,
         )
         container.refresh_index()
     except (FileNotFoundError, ValueError, InvalidInputError) as e:

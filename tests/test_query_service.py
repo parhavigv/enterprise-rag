@@ -25,8 +25,8 @@ class _FakeHybrid:
     def is_ready(self) -> bool:
         return self._ready
 
-    def retrieve(self, query, top_k=20, dense_k=50, sparse_k=50):
-        self.calls.append((query, top_k, dense_k, sparse_k))
+    def retrieve(self, query, top_k=20, dense_k=50, sparse_k=50, source=None):
+        self.calls.append((query, top_k, dense_k, sparse_k, source))
         return self._docs[:top_k]
 
 
@@ -131,6 +131,26 @@ def test_cache_key_distinguishes_model_and_images():
     assert QueryService._cache_key(
         "q", 5, True, True, "openai", "gpt-4o", ["img"]
     ) != QueryService._cache_key("q", 5, True, True, "openai", "gpt-4o")
+
+
+def test_cache_key_distinguishes_source_scope():
+    base = QueryService._cache_key("q", 5, True, True)
+    assert base != QueryService._cache_key("q", 5, True, True, source="resume.pdf")
+    assert QueryService._cache_key("q", 5, True, True, source="a.pdf") != QueryService._cache_key(
+        "q", 5, True, True, source="b.pdf"
+    )
+
+
+@pytest.mark.asyncio
+async def test_answer_forwards_source_to_retriever(service):
+    result = await service.answer("query", top_k=5, source="resume.pdf")
+    assert result.answer is not None
+    assert service._hybrid.calls and service._hybrid.calls[0][4] == "resume.pdf"
+
+
+def test_search_forwards_source_to_retriever(service):
+    service.search("query", top_k=5, source="notes.txt")
+    assert service._hybrid.calls[0][4] == "notes.txt"
 
 
 @pytest.mark.asyncio
