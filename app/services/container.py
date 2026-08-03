@@ -99,20 +99,35 @@ class Container:
     # ------------------------------------------------------------------ #
     # Generation
     # ------------------------------------------------------------------ #
-    def llm_client(self) -> AsyncLLMClient:
+    def llm_client(self, provider: str | None = None, model: str | None = None) -> AsyncLLMClient:
+        """Build an LLM client, memoising the defaults.
+
+        Pass ``provider`` / ``model`` to build a one-off client (per-request
+        override in the query API). OpenAI endpoints are resolved through
+        ``openai_base_url`` / ``openai_api_key``.
+        """
+        if provider is None and model is None:
+            return self._memo("llm", self._build_llm_client)
+        return self._build_llm_client(provider, model)
+
+    def _build_llm_client(
+        self, provider: str | None = None, model: str | None = None
+    ) -> AsyncLLMClient:
         s = self._settings
-        return self._memo(
-            "llm",
-            lambda: AsyncLLMClient(
-                provider=s.llm_provider,
-                model=s.llm_model,
-                base_url=s.llm_base_url,
-                api_key=s.llm_api_key,
-                temperature=s.llm_temperature,
-                max_tokens=s.llm_max_tokens,
-                timeout=s.llm_timeout_seconds,
-                connect_timeout=s.llm_request_timeout_seconds,
-            ),
+        prov = provider or s.llm_provider
+        base_url, api_key = s.llm_base_url, s.llm_api_key
+        if prov == "openai":
+            base_url = s.openai_base_url or s.llm_base_url
+            api_key = s.openai_api_key or s.llm_api_key
+        return AsyncLLMClient(
+            provider=prov,
+            model=model or s.llm_model,
+            base_url=base_url,
+            api_key=api_key,
+            temperature=s.llm_temperature,
+            max_tokens=s.llm_max_tokens,
+            timeout=s.llm_timeout_seconds,
+            connect_timeout=s.llm_request_timeout_seconds,
         )
 
     def researcher(self) -> ResearcherAgent:
@@ -121,6 +136,14 @@ class Container:
             lambda: ResearcherAgent(
                 llm=self.llm_client(), max_context_docs=self._settings.final_top_k
             ),
+        )
+
+    def researcher_for(
+        self, provider: str | None = None, model: str | None = None
+    ) -> ResearcherAgent:
+        """A researcher bound to a specific provider/model (per-request override)."""
+        return ResearcherAgent(
+            llm=self.llm_client(provider, model), max_context_docs=self._settings.final_top_k
         )
 
     # ------------------------------------------------------------------ #

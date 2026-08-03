@@ -76,13 +76,28 @@ class QueryService:
         )
 
     async def answer(
-        self, query: str, top_k: int | None = None, rerank: bool = True, generate: bool = True
+        self,
+        query: str,
+        top_k: int | None = None,
+        rerank: bool = True,
+        generate: bool = True,
+        *,
+        researcher: ResearcherAgent | None = None,
+        images: list[str] | None = None,
+        provider: str | None = None,
+        model: str | None = None,
     ) -> QueryResult:
-        """Full RAG: retrieve, re-rank, and generate a grounded answer."""
+        """Full RAG: retrieve, re-rank, and generate a grounded answer.
+
+        ``researcher`` overrides the memoised agent (used for per-request
+        provider/model overrides); ``images`` are attached to the LLM call as
+        vision content blocks; ``provider`` / ``model`` only affect the cache
+        key so switching models never reuses a stale cached answer.
+        """
         t0 = time.perf_counter()
         top_k = top_k or self._default_final_top_k
 
-        cache_key = self._cache_key(query, top_k, rerank, generate)
+        cache_key = self._cache_key(query, top_k, rerank, generate, provider, model, images)
         if self._cache is not None:
             cached = self._cache.get(cache_key)
             if cached is not None:
@@ -93,7 +108,8 @@ class QueryService:
         docs = self._retrieve(query, top_k, rerank)
 
         if generate:
-            research: ResearchResponse = await self._researcher.generate(query, docs)
+            agent = researcher or self._researcher
+            research: ResearchResponse = await agent.generate(query, docs, images=images)
             result = QueryResult(
                 query=query,
                 search=[d.to_dict() for d in docs],
@@ -137,5 +153,15 @@ class QueryService:
         return docs
 
     @staticmethod
-    def _cache_key(query: str, top_k: int, rerank: bool, generate: bool) -> str:
-        return f"{query.strip().lower()}|{top_k}|{rerank}|{generate}"
+    def _cache_key(
+        query: str,
+        top_k: int,
+        rerank: bool,
+        generate: bool,
+        provider: str | None = None,
+        model: str | None = None,
+        images: list[str] | None = None,
+    ) -> str:
+        image_count = len(images) if images else 0
+        model_scope = f"{provider}|{model}|img{image_count}"
+        return f"{query.strip().lower()}|{top_k}|{rerank}|{generate}|{model_scope}"

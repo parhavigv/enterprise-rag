@@ -5,6 +5,10 @@ in modern versions:
   - Ollama exposes ``{base_url}/v1/chat/completions``,
   - OpenAI exposes ``{base_url}/chat/completions``.
 
+``content`` may be a plain string or a multimodal list of content blocks
+(``{"type": "text", ...}`` / ``{"type": "image_url", ...}``) which are passed
+through verbatim, enabling vision-capable models (GPT-4o, GPT-4.1, ...).
+
 A small request-timeout heuristic keeps the API responsive when the LLM is
 slow or unreachable, without hard-coding the total generation timeout.
 """
@@ -83,7 +87,7 @@ class AsyncLLMClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> LLMResponse:
-        if not messages or not messages[-1].get("content", "").strip():
+        if not _messages_non_empty(messages):
             raise ValueError("At least one non-empty message is required.")
 
         payload: dict = {
@@ -152,3 +156,24 @@ async def asyncio_sleep(seconds: float) -> None:
     import asyncio
 
     await asyncio.sleep(seconds)
+
+
+def _messages_non_empty(messages: list[dict]) -> bool:
+    """A message qualifies if its content has at least one non-blank text part.
+
+    ``content`` may be a plain string or a list of OpenAI content blocks
+    (text / image_url / audio). Only the text blocks are inspected.
+    """
+    if not messages:
+        return False
+    content = messages[-1].get("content")
+    if isinstance(content, str):
+        return bool(content.strip())
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text" and str(block.get("text", "")).strip():
+                return True
+        return False
+    return False

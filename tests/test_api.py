@@ -46,6 +46,9 @@ class _FakeContainer:
     def ingest_service(self):
         return self.ingest_service_obj
 
+    def researcher_for(self, provider=None, model=None):
+        return SimpleNamespace(provider=provider, model=model)
+
     def stats(self):
         return {"chroma_count": 10, "bm25_count": 10}
 
@@ -54,7 +57,11 @@ class _FakeContainer:
 
 
 class _FakeQueryService:
-    async def answer(self, query, top_k=5, rerank=True, generate=True):
+    def __init__(self) -> None:
+        self.last_answer_kwargs: dict | None = None
+
+    async def answer(self, query, top_k=5, rerank=True, generate=True, **kwargs):
+        self.last_answer_kwargs = kwargs
         if query == "boom":
             from app.core.errors import UpstreamUnavailableError
 
@@ -119,6 +126,7 @@ def client():
     app.dependency_overrides[get_query_service] = lambda: fake.query_service_obj
     app.dependency_overrides[get_ingest_service] = lambda: fake.ingest_service_obj
     with TestClient(app) as c:
+        c.app.state.fake_query_service = fake.query_service_obj
         yield c
 
 
@@ -172,6 +180,34 @@ def test_ingest_invalid_format_422(client):
 
 def test_query_blank_query_422(client):
     r = client.post("/api/v1/query", json={"query": "   "})
+    assert r.status_code == 422
+
+
+def test_query_with_model_override(client):
+    r = client.post(
+        "/api/v1/query",
+        json={"query": "what is RAG?", "provider": "openai", "model": "gpt-4o"},
+    )
+    assert r.status_code == 200
+    assert client.app.state.fake_query_service.last_answer_kwargs["provider"] == "openai"
+    assert client.app.state.fake_query_service.last_answer_kwargs["model"] == "gpt-4o"
+    assert client.app.state.fake_query_service.last_answer_kwargs["researcher"] is not None
+
+
+def test_query_with_images_passes_through(client):
+    img = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    r = client.post("/api/v1/query", json={"query": "what is in the image?", "images": [img]})
+    assert r.status_code == 200
+    assert client.app.state.fake_query_service.last_answer_kwargs["images"] == [img]
+
+
+def test_query_invalid_provider_422(client):
+    r = client.post("/api/v1/query", json={"query": "q", "provider": "gemini"})
+    assert r.status_code == 422
+
+
+def test_query_oversized_image_422(client):
+    r = client.post("/api/v1/query", json={"query": "q", "images": ["x" * (14 * 1024 * 1024 + 1)]})
     assert r.status_code == 422
 
 

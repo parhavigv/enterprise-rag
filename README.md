@@ -6,7 +6,7 @@ re-ranking, and grounded LLM answers — exposed as a containerised FastAPI serv
 health probes, structured logging, caching, and CI.
 
 **Author:** Parhavi G.V | Senior AI Engineer
-**Stack:** Python 3.10 · FastAPI · LlamaIndex · ChromaDB · BM25Okapi · nomic-embed-text · sentence-transformers · Ollama · Docker
+**Stack:** Python 3.10 · FastAPI · LlamaIndex · ChromaDB · BM25Okapi · nomic-embed-text · sentence-transformers · Ollama · OpenAI (GPT-4o/4.1, Whisper) · Docker
 
 ---
 
@@ -16,8 +16,9 @@ health probes, structured logging, caching, and CI.
                     ┌────────────────────────────────────────────────────────┐
                     │                     FastAPI service                    │
                     │  /api/v1/ingest  /api/v1/upload  /api/v1/search       │
-                    │  /api/v1/query  /health  /health/ready  /api/v1/stats │
-                    │  /ui  (browser demo)                                  │
+                    │  /api/v1/query  /api/v1/transcribe  /health           │
+                    │  /health/ready  /api/v1/stats                         │
+                    │  /ui  (modern browser workspace)                      │
                     └───────┬───────────────┬────────────────┬───────────────┘
                             │               │                │
               ingest        │     retrieve   │     generate   │
@@ -37,13 +38,17 @@ health probes, structured logging, caching, and CI.
 
 - **Ingestion** — `ingestion/ingest.py` runs a pluggable parser → semantic chunker →
   Ollama embedder → ChromaDB upsert → BM25 incremental merge pipeline (new chunks are
-  merged into the persisted BM25 corpus instead of a full rebuild).
+  merged into the persisted BM25 corpus instead of a full rebuild). PDFs also get
+  **best-effort OCR** of embedded images (PyMuPDF + RapidOCR), so scanned documents are
+  searchable too.
 - **Retrieval** — `retrieval/hybrid/hybrid_retriever.py` fuses dense hits (ChromaDB,
   cosine) with sparse hits (BM25Okapi) via RRF, then `retrieval/reranker/cross_encoder.py`
   re-orders the top candidates.
 - **Answering** — `app/agents/researcher.py` builds a grounded prompt from the cited
-  passages and streams through `app/agents/llm_client.py`, with an extractive fallback
-  when the LLM is unavailable.
+  passages and streams through `app/agents/llm_client.py` (Ollama or OpenAI; multimodal
+  images supported), with an extractive fallback when the LLM is unavailable.
+- **Voice** — `app/api/routes/speech.py` transcribes browser-recorded audio via OpenAI
+  Whisper so you can ask questions by speaking.
 - **Serving** — `app/main.py` app factory with CORS, request-ID propagation, structured
   logging, typed exception handlers, and JSON health/stats endpoints.
 
@@ -58,6 +63,7 @@ Requires Python 3.10+ and a running [Ollama](https://ollama.com) server.
 python -m venv .venv
 .\.venv\Scripts\activate            # Windows
 pip install -e .                    # installs app + dev deps (pytest, ruff)
+pip install -e ".[ocr]"             # optional: OCR for scanned PDF images
 
 # 2. Models (once)
 ollama pull nomic-embed-text
@@ -97,6 +103,8 @@ All business endpoints live under `/api/v1`.
 
 ### `POST /api/v1/query`
 Full RAG round-trip: hybrid retrieve → (optional) rerank → grounded LLM answer.
+Supports per-request **provider/model overrides** and **vision chat** (attach
+base64 images that are sent to the model alongside the question).
 
 ```jsonc
 // Request
@@ -104,7 +112,10 @@ Full RAG round-trip: hybrid retrieve → (optional) rerank → grounded LLM answ
   "query": "What formats does ingestion support?",
   "top_k": 5,        // 1..20
   "rerank": true,    // cross-encoder re-ranking
-  "generate": true   // LLM answer; false → retrieval only
+  "generate": true,  // LLM answer; false → retrieval only
+  "provider": "openai",   // optional override: ollama | openai
+  "model": "gpt-4o",      // optional override, e.g. gpt-4o / gpt-4.1 / llama3
+  "images": ["data:image/png;base64,..."]   // optional vision input (max 4)
 }
 
 // Response
@@ -112,12 +123,22 @@ Full RAG round-trip: hybrid retrieve → (optional) rerank → grounded LLM answ
   "query": "...",
   "search": [{"node_id": "...", "text": "...", "score": 0.9, "metadata": {...}, "source": "hybrid"}],
   "answer": "Ingestion supports PDF, DOCX and URL sources. [1]",
-  "model": "llama3.1",
+  "model": "gpt-4o",
   "generated": true,
   "latency_ms": 1200.5,
   "error": null,
   "cache_hit": false
 }
+```
+
+### `POST /api/v1/transcribe`
+Voice question input. Multipart audio upload (webm/ogg/mp3/wav) transcribed
+with OpenAI Whisper (`whisper-1` by default) and returned as text, ready to be
+asked. Requires `OPENAI_API_KEY`.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/transcribe -F "file=@question.webm"
+# {"text": "how much does the business plan cost?", "model": "whisper-1", ...}
 ```
 
 ### `POST /api/v1/search`
@@ -160,8 +181,10 @@ curl -X POST http://127.0.0.1:8000/api/v1/upload ^
 ```
 
 ### `GET /ui`
-Lightweight browser demo: upload a file, ask questions, and see the grounded
-answer with its source passages and retrieval metrics (no frontend build step).
+Modern browser workspace (no build step): drag-and-drop upload, chat with
+sources, **attach images** for vision chat, a **record-your-voice** mic button
+(Whisper), and a model picker that can switch between Ollama and OpenAI
+per question.
 
 ### `GET /api/v1/stats`
 Index statistics: Chroma collection + count, BM25 path + count, active embed/LLM models.
@@ -192,7 +215,7 @@ docker compose up --build -d
 `.github/workflows/ci.yml` runs on `main`/`master`:
 
 1. **Lint** — `ruff check` + `ruff format --check` (line length 100).
-2. **Unit tests** — full pytest suite (121 tests); Ollama-dependent tests are
+2. **Unit tests** — full pytest suite (146 tests); Ollama-dependent tests are
    marker-deselected in CI (`-m "not ollama"`).
 3. **Docker build** — verifies the image builds and healthchecks pass.
 
@@ -207,6 +230,9 @@ Everything is driven by environment variables (see `.env.example`). Key settings
 | `LLM_PROVIDER` | `ollama` | `ollama` or `openai` (any OpenAI-compatible API) |
 | `LLM_MODEL` | `llama3.1` | Chat model used for answer generation |
 | `LLM_BASE_URL` | `http://localhost:11434/v1` | Chat-completions endpoint |
+| `OPENAI_API_KEY` | — | OpenAI key; required for GPT, vision, and Whisper |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
+| `WHISPER_MODEL` | `whisper-1` | Speech-to-text model for the mic button |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Embedding endpoint (`/api/embeddings`) |
 | `EMBED_MODEL` | `nomic-embed-text` | Embedding model (768-d vectors) |
 | `DENSE_TOP_K` / `SPARSE_TOP_K` | `50` / `50` | Candidates per retriever |
@@ -267,12 +293,12 @@ python -m ruff format --check .
 
 ```
 app/                 # FastAPI service
-  api/               # routes (health, query, ingest), Pydantic schemas, deps
+  api/               # routes (health, query, ingest, speech), Pydantic schemas, deps
   core/              # config, logging, errors, cache
   services/          # container (DI), query service, ingest service
-  agents/            # LLM client, researcher agent
+  agents/            # LLM client (multimodal), researcher agent
 ingestion/
-  parsers/           # pdf, docx, txt, url
+  parsers/           # pdf (with OCR), docx, txt, url
   chunkers/          # semantic chunker + size config
   embedders/         # Ollama embedder (retries, health), nomic facade
   ingest.py          # run_ingestion() pipeline
@@ -286,7 +312,7 @@ scripts/
   seed.py            # index documents / built-in demo corpus
   eval.py            # gold-set evaluation
   smoke_test.py      # live end-to-end API verification
-tests/               # 121 unit tests
+tests/               # 146 unit tests
 Dockerfile           # production image
 docker-compose.yml   # api + ollama + models-init
 .github/workflows/   # CI: lint → test → docker

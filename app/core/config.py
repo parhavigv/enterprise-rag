@@ -60,6 +60,15 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 120.0
     llm_request_timeout_seconds: float = 10.0
 
+    # --- OpenAI (GPT / vision / Whisper speech-to-text) ---
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_api_key: str = ""  # falls back to llm_api_key when provider=openai
+    whisper_model: str = "whisper-1"
+
+    # --- Vision chat ---
+    vision_max_images: int = 4
+    vision_max_image_bytes: int = 10 * 1024 * 1024  # 10 MB per image
+
     # --- Vector store ---
     chroma_path: str = "./data/chroma"
     chroma_collection: str = "enterprise_rag"

@@ -112,3 +112,34 @@ def test_extractive_summary_truncates_long_passages():
     long_doc[0].text = "word " * 2000
     out = ResearcherAgent._extractive_summary(long_doc)
     assert len(out) < 700
+
+
+@pytest.mark.asyncio
+async def test_generate_without_images_uses_plain_string_content():
+    llm = _FakeLLM()
+    agent = ResearcherAgent(llm=llm)
+    await agent.generate("question?", _docs())
+    assert isinstance(llm.last_messages[-1]["content"], str)
+
+
+@pytest.mark.asyncio
+async def test_generate_with_images_builds_multimodal_content():
+    llm = _FakeLLM()
+    agent = ResearcherAgent(llm=llm)
+    await agent.generate("what is this?", _docs(n=1), images=["data:image/png;base64,AAAA", "BBBB"])
+    content = llm.last_messages[-1]["content"]
+    assert isinstance(content, list)
+    assert content[0] == {"type": "text", "text": content[0]["text"]}
+    assert any(
+        b["type"] == "image_url" and b["image_url"]["url"] == "data:image/png;base64,AAAA"
+        for b in content
+    )
+    assert content[-1]["image_url"]["url"] == "data:image/png;base64,BBBB"
+
+
+def test_image_data_uri_normalisation():
+    assert (
+        ResearcherAgent._image_data_uri("data:image/jpeg;base64,xx") == "data:image/jpeg;base64,xx"
+    )
+    assert ResearcherAgent._image_data_uri("base64,zz") == "data:image/png;base64,zz"
+    assert ResearcherAgent._image_data_uri("rawbase64") == "data:image/png;base64,rawbase64"

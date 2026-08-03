@@ -15,6 +15,13 @@ class QueryRequest(BaseModel):
     top_k: int = Field(5, ge=1, le=20, description="Number of final results")
     rerank: bool = Field(True, description="Apply cross-encoder re-ranking")
     generate: bool = Field(True, description="Generate a grounded LLM answer")
+    provider: str | None = Field(None, description="LLM provider override: ollama | openai")
+    model: str | None = Field(None, description="Model override, e.g. gpt-4o or llama3")
+    images: list[str] | None = Field(
+        None,
+        max_length=4,
+        description="Base64 images (or data URIs) attached to the LLM call for vision chat",
+    )
 
     @field_validator("query")
     @classmethod
@@ -22,6 +29,27 @@ class QueryRequest(BaseModel):
         if not v.strip():
             raise ValueError("query must not be blank")
         return v.strip()
+
+    @field_validator("provider")
+    @classmethod
+    def _validate_provider(cls, v: str | None) -> str | None:
+        if v is not None and v not in {"ollama", "openai"}:
+            raise ValueError("provider must be one of: ollama, openai")
+        return v
+
+    @field_validator("images")
+    @classmethod
+    def _validate_images(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        cleaned: list[str] = []
+        for image in v:
+            if not image or not image.strip():
+                raise ValueError("images must not contain empty entries")
+            if len(image) > 14 * 1024 * 1024:  # ~10 MB raw binary in base64
+                raise ValueError("each image must be at most ~10 MB")
+            cleaned.append(image.strip())
+        return cleaned or None
 
 
 class SourceModel(BaseModel):
@@ -96,3 +124,12 @@ class StatsResponse(BaseModel):
 
 class ErrorModel(BaseModel):
     error: dict[str, Any] = Field(default_factory=dict)
+
+
+# --------------------------------------------------------------------- #
+# Speech
+# --------------------------------------------------------------------- #
+class TranscribeResponse(BaseModel):
+    text: str = Field("", description="Transcribed text from the uploaded audio")
+    model: str = Field("whisper-1", description="Transcription model used")
+    duration_ms: float = Field(0.0, description="Round-trip transcription latency")

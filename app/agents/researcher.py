@@ -52,7 +52,12 @@ class ResearcherAgent:
     def model(self) -> str:
         return self._llm.model
 
-    async def generate(self, query: str, documents: list[RetrievedDocument]) -> ResearchResponse:
+    async def generate(
+        self,
+        query: str,
+        documents: list[RetrievedDocument],
+        images: list[str] | None = None,
+    ) -> ResearchResponse:
         t0 = time.perf_counter()
         sources = documents[: self._max_context_docs]
 
@@ -76,12 +81,11 @@ class ResearcherAgent:
         )
 
         try:
-            result = await self._llm.complete(
-                [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ]
-            )
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": self._user_content(user_prompt, images)},
+            ]
+            result = await self._llm.complete(messages)
             answer = result.text
             logger.info(
                 "LLM generation ok | model={} | tokens={} | latency={:.0f}ms",
@@ -112,6 +116,28 @@ class ResearcherAgent:
     # ------------------------------------------------------------------ #
     # Prompt / fallback internals
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _user_content(prompt: str, images: list[str] | None) -> str | list[dict]:
+        """Plain string prompt, or a multimodal block list when images exist."""
+        if not images:
+            return prompt
+        blocks: list[dict] = [{"type": "text", "text": prompt}]
+        for image in images:
+            blocks.append(
+                {"type": "image_url", "image_url": {"url": ResearcherAgent._image_data_uri(image)}}
+            )
+        return blocks
+
+    @staticmethod
+    def _image_data_uri(data: str) -> str:
+        """Normalise raw base64 / bare 'base64,' input into a data URI."""
+        data = data.strip()
+        if data.startswith("data:image"):
+            return data
+        if data.startswith("base64,"):
+            return "data:image/png;base64," + data[len("base64,") :]
+        return "data:image/png;base64," + data
+
     @staticmethod
     def _format_context(documents: list[RetrievedDocument]) -> str:
         blocks = []

@@ -31,10 +31,15 @@ class _FakeHybrid:
 
 
 class _FakeResearcher:
-    async def generate(self, query, documents):
+    def __init__(self, name: str = "researcher") -> None:
+        self.name = name
+        self.calls = []
+
+    async def generate(self, query, documents, images=None):
+        self.calls.append((query, documents, images))
         return SimpleNamespace(
             query=query,
-            answer="the answer",
+            answer=f"the answer from {self.name}",
             sources=documents,
             model="m",
             generated=True,
@@ -82,7 +87,7 @@ def test_search_no_rerank_truncates(service):
 @pytest.mark.asyncio
 async def test_answer_generates(service):
     result = await service.answer("query", top_k=5, rerank=True, generate=True)
-    assert result.answer == "the answer"
+    assert result.answer == "the answer from researcher"
     assert result.generated is True
     assert result.model == "m"
     assert result.cache_hit is False
@@ -92,7 +97,7 @@ async def test_answer_generates(service):
 async def test_answer_caches_identical_queries(service):
     r1 = await service.answer("Hello World", top_k=5)
     r2 = await service.answer("hello world", top_k=5)  # case-insensitive key
-    assert r1.answer == r2.answer == "the answer"
+    assert r1.answer == r2.answer == "the answer from researcher"
     assert r2.cache_hit is True
     assert len(service._hybrid.calls) == 1  # second call served from cache
 
@@ -118,6 +123,30 @@ def test_cache_key_normalisation():
     assert QueryService._cache_key("Hello ", 5, True, True) == QueryService._cache_key(
         "hello", 5, True, True
     )
+
+
+def test_cache_key_distinguishes_model_and_images():
+    base = QueryService._cache_key("q", 5, True, True)
+    assert base != QueryService._cache_key("q", 5, True, True, "openai", "gpt-4o")
+    assert QueryService._cache_key(
+        "q", 5, True, True, "openai", "gpt-4o", ["img"]
+    ) != QueryService._cache_key("q", 5, True, True, "openai", "gpt-4o")
+
+
+@pytest.mark.asyncio
+async def test_answer_uses_overridden_researcher(service):
+    override = _FakeResearcher(name="override")
+    result = await service.answer("query", top_k=5, researcher=override, images=["img"])
+    assert result.answer == "the answer from override"
+    assert override.calls and override.calls[0][2] == ["img"]
+
+
+@pytest.mark.asyncio
+async def test_answer_with_images_not_cached_with_plain_query(service):
+    await service.answer("same", top_k=5)
+    r_image = await service.answer("same", top_k=5, images=["img"])
+    assert r_image.cache_hit is False  # distinct cache key
+    assert len(service._hybrid.calls) == 2
 
 
 def test_clear_cache(service):
