@@ -200,6 +200,17 @@ class Container:
             self._cache.pop(key, None)
         logger.info("Index refreshed after ingestion.")
 
+    def list_sources(self) -> list[dict]:
+        """Distinct metadata sources in the index, most chunks first."""
+        try:
+            counts = self.bm25_indexer().sources()
+        except Exception:  # noqa: BLE001 - an empty index is a valid answer
+            return []
+        return [
+            {"source": src, "count": cnt}
+            for src, cnt in sorted(counts.items(), key=lambda item: -item[1])
+        ]
+
     def stats(self) -> dict:
         """Aggregate index statistics for observability endpoints."""
         try:

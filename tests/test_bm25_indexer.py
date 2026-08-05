@@ -223,3 +223,28 @@ class TestWeek2InterfaceContract:
         BM25Indexer(index_path=idx_path).build(SAMPLE_NODES)
         loaded = BM25Indexer.load(index_path=idx_path)
         assert loaded.count() > 0
+
+
+class TestBM25Sources:
+    @staticmethod
+    def _node(text, source):
+        node = MagicMock()
+        node.node_id = str(uuid.uuid4())
+        node.text = text
+        node.metadata = {"source": source, "filename": source}
+        return node
+
+    def test_sources_counts_distinct_metadata_sources(self, tmp_path):
+        nodes = [
+            self._node("alpha document one", "a.pdf"),
+            self._node("alpha document two", "a.pdf"),
+            self._node("beta document one", "b.txt"),
+            self._node("uncategorised", ""),
+        ]
+        indexer = BM25Indexer(index_path=tmp_path / "s.pkl")
+        indexer.build(nodes)
+        assert indexer.sources() == {"a.pdf": 2, "b.txt": 1}
+
+    def test_sources_empty_before_build(self, tmp_path):
+        indexer = BM25Indexer(index_path=tmp_path / "s.pkl")
+        assert indexer.sources() == {}

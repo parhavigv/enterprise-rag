@@ -21,6 +21,9 @@ class _EmptyBm25:
     def count(self) -> int:
         return 10
 
+    def sources(self) -> dict[str, int]:
+        return {"a.pdf": 2, "b.txt": 1}
+
 
 class _FakeContainer:
     def __init__(self) -> None:
@@ -69,6 +72,9 @@ class _FakeContainer:
 
     def stats(self):
         return {"chroma_count": 10, "bm25_count": 10}
+
+    def list_sources(self):
+        return [{"source": "a.pdf", "count": 2}, {"source": "b.txt", "count": 1}]
 
     def refresh_index(self):
         return None
@@ -288,7 +294,15 @@ def test_ui_page(client):
     r = client.get("/ui")
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
+    assert "no-store" in r.headers.get("cache-control", "")
     assert "Upload" in r.text and "/api/v1/query" in r.text
+
+
+def test_sources_endpoint(client):
+    r = client.get("/api/v1/sources")
+    assert r.status_code == 200
+    body = r.json()
+    assert body == [{"source": "a.pdf", "count": 2}, {"source": "b.txt", "count": 1}]
 
 
 def test_upload_txt(client):

@@ -7,11 +7,16 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_container, get_query_service
-from app.api.models import QueryRequest, QueryResponse
+from app.api.models import QueryRequest, QueryResponse, SourceInfo
 from app.services.container import Container
 from app.services.query_service import QueryService
 
 router = APIRouter(tags=["query"])
+
+
+@router.get("/sources", response_model=list[SourceInfo], summary="List indexed document sources")
+def sources(container: Container = Depends(get_container)) -> list[SourceInfo]:
+    return [SourceInfo(**item) for item in container.list_sources()]
 
 
 @router.post("/query", response_model=QueryResponse, summary="Retrieve and answer")

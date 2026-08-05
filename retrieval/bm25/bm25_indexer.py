@@ -211,6 +211,17 @@ class BM25Indexer:
         print(f"BM25 index loaded  |  {len(indexer._payload.doc_ids)} chunks")
         return indexer
 
+    def sources(self) -> dict[str, int]:
+        """Distinct non-empty metadata sources in the corpus, with chunk counts."""
+        if self._payload is None:
+            return {}
+        counts: dict[str, int] = {}
+        for meta in self._payload.doc_metas.values():
+            src = str(meta.get("source") or "").strip()
+            if src:
+                counts[src] = counts.get(src, 0) + 1
+        return counts
+
     def count(self) -> int:
         if self._payload is None:
             return 0

@@ -281,10 +281,19 @@ let pendingImages = [];      // data URIs
 let pendingFile = null;
 let lastSource = '';         // metadata source of the most recent upload
 let lastSourceLabel = '';
+let scopeSources = [];       // [{source, count}] from /api/v1/sources
 let recording = null;        // MediaRecorder
 let recordedChunks = [];
 
 const esc = s => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const baseName = s => String(s || '').split(/[\\/]/).pop() || s;
+
+function errMsg(j, fallback) {
+  if (j && j.error && j.error.message) return j.error.message;
+  if (j && Array.isArray(j.detail)) return j.detail.map(d => d.msg || 'invalid input').join('; ');
+  if (j && typeof j.detail === 'string') return j.detail;
+  return fallback;
+}
 
 function toast(msg, cls) { const t = $('toast'); t.textContent = msg; t.className = 'toast show ' + (cls||''); clearTimeout(t._h); t._h = setTimeout(()=>t.className='toast', 2600); }
 
@@ -342,7 +351,7 @@ $('uploadBtn').addEventListener('click', async () => {
     fd.append('chunk_size', '512T');
     const r = await fetch('/api/v1/upload', { method: 'POST', body: fd });
     const j = await r.json();
-    if (!r.ok) throw new Error(j.error ? j.error.message : 'Upload failed');
+    if (!r.ok) throw new Error(errMsg(j, 'Upload failed'));
     const m = j.metrics || {};
     const rows = ['filename','chunks','chroma_count','bm25_count','total_seconds']
       .filter(k => m[k] !== undefined)
@@ -352,7 +361,7 @@ $('uploadBtn').addEventListener('click', async () => {
     $('upStat').textContent = 'indexed';
     lastSource = m.filename || '';
     lastSourceLabel = lastSource;
-    if (lastSource) { scopeOptions(); $('scope').value = lastSource; $('reviewBtn').style.display = ''; }
+    if (lastSource) { loadScope(); $('scope').value = lastSource; updateReviewVisibility(); }
     toast('Document indexed — ask away.', 'ok');
   } catch (e) {
     $('uploadStatus').className = 'status err';
@@ -416,7 +425,7 @@ async function transcribe(blob) {
     fd.append('file', blob, 'recording.webm');
     const r = await fetch('/api/v1/transcribe', { method: 'POST', body: fd });
     const j = await r.json();
-    if (!r.ok) throw new Error(j.error ? j.error.message : 'Transcription failed');
+    if (!r.ok) throw new Error(errMsg(j, 'Transcription failed'));
     if (j.text) { $('q').value = j.text; toast('Heard: "' + j.text.slice(0, 60) + '"', 'ok'); ask(); }
     else toast('No speech detected.', 'err');
   } catch (e) {
@@ -462,14 +471,15 @@ function renderSources(srch) {
   $('srcCount').textContent = srch.length + ' hits';
   $('sources').innerHTML = srch.map((s,i) => {
     const fname = (s.metadata && (s.metadata.filename || s.metadata.source))
-      ? String(s.metadata.filename || s.metadata.source).split(/[\\/]/).pop() : '';
+      ? baseName(s.metadata.filename || s.metadata.source) : '';
+    const snippet = String((s && s.text) || '');
     return `
     <div style="padding:9px 10px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;margin-bottom:8px">
       <div style="font-size:11px;color:var(--muted);margin-bottom:4px">
         <b style="color:var(--brand-dark)">score ${Number(s.score).toFixed(3)}</b>
         · ${esc(s.source||'hybrid')}${fname ? ' · <span style="color:var(--text)">' + esc(fname) + '</span>' : ''}${s.metadata && s.metadata.page_number ? ' · p.' + s.metadata.page_number : ''}
       </div>
-      <div style="font-size:12px;color:var(--text);white-space:pre-wrap;word-break:break-word">${esc(s.text.length>420 ? s.text.slice(0,420)+'…' : s.text)}</div>
+      <div style="font-size:12px;color:var(--text);white-space:pre-wrap;word-break:break-word">${esc(snippet.length>420 ? snippet.slice(0,420)+'…' : snippet)}</div>
     </div>`;
   }).join('');
 }
@@ -493,7 +503,7 @@ async function ask() {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     });
     const j = await r.json();
-    if (!r.ok) throw new Error(j.error ? j.error.message : 'Query failed');
+    if (!r.ok) throw new Error(errMsg(j, 'Query failed'));
     typing(false);
     const cites = j.search && j.search.length
       ? j.search.map((s,i) => `<span class="cite" onclick="toggleSrc(${i})">[${i+1}]</span>`).join('')
@@ -516,20 +526,53 @@ function toggleSrc(i) {
 }
 
 /* ---------------- document scope ---------------- */
+function updateReviewVisibility() {
+  $('reviewBtn').style.display = ($('scope').value ? '' : 'none');
+}
 function scopeOptions() {
   const sel = $('scope');
   const prev = sel.value;
   sel.innerHTML = '<option value="">All documents</option>';
-  if (lastSource) {
+  const seen = {};
+  scopeSources.forEach(s => {
+    seen[s.source] = true;
+    const o = document.createElement('option');
+    o.value = s.source;
+    o.textContent = '\u21a6 ' + baseName(s.source);
+    sel.appendChild(o);
+  });
+  if (lastSource && !seen[lastSource]) {
     const o = document.createElement('option');
     o.value = lastSource;
-    o.textContent = '\u21a6 ' + lastSourceLabel;
+    o.textContent = '\u21a6 ' + baseName(lastSourceLabel || lastSource);
     sel.appendChild(o);
   }
   if (prev && Array.from(sel.options).some(o => o.value === prev)) sel.value = prev;
+  else if (!sel.value && sel.options.length === 2) sel.value = sel.options[1].value;
+  updateReviewVisibility();
+}
+async function loadScope() {
+  try {
+    const r = await fetch('/api/v1/sources');
+    const j = await r.json();
+    if (!r.ok) throw new Error('sources unavailable');
+    scopeSources = Array.isArray(j) ? j : [];
+  } catch (e) { scopeSources = []; }
+  scopeOptions();
 }
 
 /* ---------------- answer engine settings ---------------- */
+function syncModelSelect(provider, model) {
+  const sel = $('model');
+  const key = (provider || 'ollama') + '::' + (model || '');
+  const hit = Array.from(sel.options).find(o => o.value === key);
+  if (hit) { sel.value = key; return; }
+  const o = document.createElement('option');
+  o.value = key;
+  o.textContent = (provider || 'ollama') + ' \u00b7 ' + (model || '') + ' (active)';
+  sel.appendChild(o);
+  sel.value = key;
+}
 async function loadSettings() {
   try {
     const r = await fetch('/api/v1/settings');
@@ -538,6 +581,7 @@ async function loadSettings() {
     $('setProvider').value = j.provider || 'ollama';
     $('setModel').value = j.model || '';
     $('engineTag').textContent = j.api_key_masked ? 'key set' : 'no API key';
+    syncModelSelect(j.provider, j.model);
   } catch (e) { $('engineTag').textContent = 'unavailable'; }
 }
 $('applySet').addEventListener('click', async () => {
@@ -554,11 +598,12 @@ $('applySet').addEventListener('click', async () => {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     });
     const j = await r.json();
-    if (!r.ok) throw new Error(j.error ? j.error.message : 'Update failed');
+    if (!r.ok) throw new Error(errMsg(j, 'Update failed'));
     $('setStatus').className = 'status ok';
     $('setStatus').textContent = 'Saved: ' + j.provider + ' \u00b7 ' + j.model;
     $('engineTag').textContent = j.api_key_masked ? 'key set' : 'no API key';
     $('setKey').value = '';
+    syncModelSelect(j.provider, j.model);
     toast('Answer engine updated — next question uses ' + j.model, 'ok');
   } catch (e) {
     $('setStatus').className = 'status err';
@@ -574,8 +619,9 @@ $('askBtn').addEventListener('click', ask);
 $('q').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); }
 });
+$('scope').addEventListener('change', updateReviewVisibility);
 
-loadModels(); loadSettings(); health(); setInterval(health, 15000);
+loadModels(); loadSettings(); loadScope(); health(); setInterval(health, 15000);
 </script>
 </body>
 </html>
@@ -583,5 +629,5 @@ loadModels(); loadSettings(); health(); setInterval(health, 15000);
 
 
 @router.get("/ui", response_class=HTMLResponse, include_in_schema=False)
-def ui() -> str:
-    return PAGE
+def ui() -> HTMLResponse:
+    return HTMLResponse(content=PAGE, headers={"Cache-Control": "no-store"})

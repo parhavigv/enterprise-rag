@@ -139,6 +139,11 @@ class ErrorModel(BaseModel):
     error: dict[str, Any] = Field(default_factory=dict)
 
 
+class SourceInfo(BaseModel):
+    source: str = Field(..., description="Distinct metadata source in the index")
+    count: int = Field(..., description="Number of chunks from this source")
+
+
 # --------------------------------------------------------------------- #
 # Speech
 # --------------------------------------------------------------------- #
