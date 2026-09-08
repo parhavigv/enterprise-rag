@@ -71,4 +71,4 @@ jobs:
       - name: Build image
         run: docker build -t enterprise-rag:ci .
       - name: Verify image healthcheck metadata
-        run: docker inspect enterprise-rag:ci --format '{{.Config.Healthcheck}}' | grep -q Test
+        run: docker inspect enterprise-rag:ci --format '{{json .Config.Healthcheck}}' | grep -q '"Test"'
