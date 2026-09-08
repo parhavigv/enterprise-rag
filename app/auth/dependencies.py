@@ -16,9 +16,14 @@ from fastapi import Depends, HTTPException, Request, status
 
 from app.api.deps import get_container
 from app.auth.models import AuthUser, get_role
-from app.auth.service import AuthService
+from app.auth.service import AuthService, TokenVerificationError
 from app.auth.users import UserStore
+from app.core.logging import get_logger
 from app.services.container import Container
+
+logger = get_logger(__name__)
+
+_WWW_AUTH = {"WWW-Authenticate": "Bearer"}
 
 
 def get_auth_service(container: Container = Depends(get_container)) -> AuthService:
@@ -38,6 +43,15 @@ def _extract_bearer(authorization: str | None) -> str | None:
     return token.strip()
 
 
+def _unauthorized(detail: str) -> HTTPException:
+    """401 with an RFC 6750 ``WWW-Authenticate`` challenge."""
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=detail,
+        headers=_WWW_AUTH,
+    )
+
+
 def get_current_user(
     request: Request,
     container: Container = Depends(get_container),
@@ -55,17 +69,23 @@ def get_current_user(
 
     token = _extract_bearer(request.headers.get("Authorization"))
     if token is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing bearer token. Include 'Authorization: Bearer <token>'.",
-        )
+        logger.info("Rejected request without bearer token | path={}", request.url.path)
+        raise _unauthorized("Authentication required. Send 'Authorization: Bearer <token>'.")
+
     try:
         return auth.verify(token)
-    except Exception as exc:  # noqa: BLE001 - surface any decode failure as 401
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid or expired token: {exc}",
-        ) from exc
+    except TokenVerificationError as exc:
+        # Log the specific PyJWT reason server-side; never echo it to clients
+        # (it can carry algorithm/claim details useful to an attacker).
+        logger.warning(
+            "Rejected invalid token | path={} | reason={}",
+            request.url.path,
+            exc.__cause__ or exc,
+        )
+        raise _unauthorized("Invalid or expired token.") from exc
+    except Exception as exc:  # noqa: BLE001 - any unexpected decode failure is a 401
+        logger.error("Token verification failed unexpectedly | reason={}", exc)
+        raise _unauthorized("Invalid or expired token.") from exc
 
 
 def require_role(*minimum: str):
@@ -73,7 +93,7 @@ def require_role(*minimum: str):
 
     Usage::
 
-        @router.get("/audit", dependencies=[Depends(require_role("manager", "admin"))])
+        @router.get("/audit", dependencies=[Depends(require_role("admin", "executive"))])
     """
 
     def _check(user: AuthUser = Depends(get_current_user)) -> AuthUser:

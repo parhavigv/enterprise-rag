@@ -1,32 +1,28 @@
 [
   {
     "username": "alice",
-    "salt": "alice-dev",
-    "password_hash": "510b2d8b9d5284f3cb9ad8b7e5187a0227e046c4adc0043a9422557c980e3e2a",
+    "password_hash": "$pbkdf2-sha256$i=600000$d27de5bc9fe4dfd39ef3c34db437f2d2$31d6316020feb16f702225b31ce83a9f98f8e78544bbb758a490c107cb7fc298",
     "role": "admin",
     "name": "Alice Admin",
     "departments": ["PUBLIC", "ENGINEERING", "PRODUCT", "FINANCE", "HR", "LEGAL", "OPS"]
   },
   {
     "username": "bob",
-    "salt": "bob-dev",
-    "password_hash": "f3cd9d7e50fb53ed6fb4f31d8555699af725879b3ec445af73fd0c62fe4d2212",
+    "password_hash": "$pbkdf2-sha256$i=600000$eca8ca74a10dfa61f64048838c5966ed$d96acc0c94bc3262903f2c4c00c4542d6f836989d3d26a19191283f2524bb793",
     "role": "manager",
     "name": "Bob Manager",
     "departments": ["PUBLIC", "ENGINEERING", "PRODUCT", "FINANCE", "HR", "OPS"]
   },
   {
     "username": "carol",
-    "salt": "carol-dev",
-    "password_hash": "2a7d027ba83652c6a6be2d93784ff527ca01703c18a3f4d72e5435ae42578384",
+    "password_hash": "$pbkdf2-sha256$i=600000$bc8009cfeae5639bca69d62d05be838f$50aecd67b214423bb9f9dab5d38b90991fd462d6a7f0bcf4802b846bd72144ab",
     "role": "employee",
     "name": "Carol Employee",
     "departments": ["PUBLIC", "ENGINEERING", "OPS"]
   },
   {
     "username": "dave",
-    "salt": "dave-dev",
-    "password_hash": "8378d4dbcb90762cb5d8da40934f89f5041159145eb5592c0e62c90688201c6c",
+    "password_hash": "$pbkdf2-sha256$i=600000$f3c52599c0f40fd5b964374c6abb561a$a95e3e8175be6865c64738cb16235ce383fc76f6358db4e8faba49f5c96023a1",
     "role": "intern",
     "name": "Dave Intern",
     "departments": ["PUBLIC"]

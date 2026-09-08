@@ -69,6 +69,15 @@ class TestACLMetadataDefaults:
         assert acl.clearance_level == ClearanceLevel.SECRET
         assert acl.owner == "bob"
 
-    def test_unknown_clearance_falls_back_to_public_in_merge(self):
-        meta = ACLMetadata.merge_defaults({}, {"clearance_level": "bogus"})
-        assert meta["clearance_level"] == ClearanceLevel.PUBLIC.name
+    def test_invalid_clearance_raises_in_merge(self):
+        # A bad clearance must fail loudly, never silently downgrade to PUBLIC,
+        # or a typo could loosen a document's access policy.
+        with pytest.raises(ValueError, match="Unknown clearance level"):
+            ACLMetadata.merge_defaults({}, {"clearance_level": "bogus"})
+
+    def test_merge_unknown_clearance_in_existing_metadata_keeps_safe_default(self):
+        # Metadata dicts may carry arbitrary keys; accessing a bogus value
+        # through from_metadata must not crash the filter (defensive UFCS path).
+        acl = ACLMetadata.from_metadata({"clearance_level": 42, "department": "hr"})
+        assert acl.clearance_level == ClearanceLevel.PUBLIC
+        assert acl.department == "HR"

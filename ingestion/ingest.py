@@ -137,8 +137,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rebuild-bm25", action="store_true")
     p.add_argument("--source-name", help="Human-friendly source label (defaults to path)")
     p.add_argument("--department", default="PUBLIC", help="Owning department (ACL metadata)")
-    p.add_argument("--clearance-level", default="public",
-                   help="Sensitivity: public | internal | confidential | secret")
+    p.add_argument(
+        "--clearance-level",
+        default="public",
+        help="Sensitivity: public | internal | confidential | secret",
+    )
     p.add_argument("--owner", help="Document owner (ACL metadata)")
     return p
 

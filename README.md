@@ -11,7 +11,7 @@ health probes, structured logging, caching, and CI.
 > (before fusion / re-ranking), not as a post-hoc filter. Includes JWT authentication,
 > document-level ACL metadata, audit logging, an Excel (.xlsx) parser, and an adversarial
 > guardrail test suite proving the no-leakage property. The original 146-test platform is
-> inherited as infrastructure; the RBAC layer adds ~59 focused tests.
+> inherited as infrastructure; the RBAC/governance layer adds ~85 focused tests.
 
 **Author:** Parhavi G.V | Senior AI Engineer
 **Stack:** Python 3.10 · FastAPI · LlamaIndex · ChromaDB · BM25Okapi · nomic-embed-text · sentence-transformers · Ollama · OpenAI (GPT-4o/4.1, Whisper) · Docker · PyJWT · openpyxl
@@ -170,6 +170,17 @@ unsecured (development only). The dev user store ships with four accounts:
 | `bob` | manager | `manager-password!` |
 | `carol` | employee | `employee-password!` |
 | `dave` | intern | `intern-password!` |
+
+### Governance hardening
+
+| Control | Implementation |
+|---------|----------------|
+| Credential storage | PBKDF2-HMAC-SHA256, 600k iterations (OWASP 2023+), per-user random salt, constant-time compare, versioned `$pbkdf2-sha256$i=…` records |
+| Token claims | RFC 7519 `iss`/`aud`/`iat`/`nbf`/`exp`/`jti` — audience-scoped so tokens cannot be replayed across services |
+| Secret enforcement | `ENVIRONMENT=production` refuses to boot without `AUTH_JWT_SECRET` ≥ 32 chars |
+| 401 handling | Generic client detail + `WWW-Authenticate: Bearer`; decode internals only go to server logs |
+| Brute-force defence | Sliding-window rate limit on `/login` and `/token-info` (`429` + `Retry-After`) |
+| Fail-safe ACLs | Invalid clearance at ingestion fails loudly (422) instead of silently downgrading to public; the retrieval-time reader degrades to public-only |
 
 ---
 
@@ -351,8 +362,8 @@ docker compose up --build -d
 `.github/workflows/ci.yml` runs on `main`/`master`:
 
 1. **Lint** — `ruff check` + `ruff format --check` (line length 100).
-2. **Unit tests** — full pytest suite (205 tests); Ollama-dependent tests are
-   marker-deselected in CI (`-m "not ollama"`).
+2. **Unit tests** — full pytest suite (231 tests, 76% coverage gate); Ollama-dependent
+   tests are marker-deselected in CI (`-m "not ollama"`).
 3. **Docker build** — verifies the image builds and healthchecks pass.
 
 ---
@@ -380,11 +391,15 @@ Everything is driven by environment variables (see `.env.example`). Key settings
 | `LOG_FORMAT` | `json` | `json` (prod) or `console` (dev) |
 | `CHROMA_SERVER_ENABLED` | `false` | Use embedded Chroma (`true` for a remote server) |
 | `AUTH_ENABLED` | `true` | Require JWT on query / ingest routes (`false` = dev only) |
-| `AUTH_JWT_SECRET` | `change-me-...` | HMAC-SHA256 key for signing access tokens |
+| `AUTH_JWT_SECRET` | `change-me-...` | HMAC-SHA256 key for signing access tokens; **required ≥ 32 chars when `ENVIRONMENT=production`** |
 | `AUTH_JWT_ALGORITHM` | `HS256` | JWT signing algorithm |
 | `AUTH_JWT_EXPIRE_SECONDS` | `3600` | Access-token lifetime |
-| `AUTH_USERS_PATH` | `app/auth/users.json` | Dev user store (users + hashed passwords) |
-| `AUDIT_LEVEL` | `info` | `info` or `debug` access-control audit verbosity |
+| `AUTH_ISSUER` / `AUTH_AUDIENCE` | `enterprise-rag` | RFC 7519 `iss` / `aud` claims (audience-scoped tokens) |
+| `AUTH_RATE_LIMIT_ENABLED` | `true` | Throttle `/login` + `/token-info` (per IP, sliding window) |
+| `AUTH_RATE_LIMIT_MAX_REQUESTS` | `10` | Requests allowed per window, per client |
+| `AUTH_RATE_LIMIT_WINDOW_SECONDS` | `60` | Rate-limit window length |
+| `AUTH_USERS_PATH` | `app/auth/users.json` | Dev user store (PBKDF2-hashed passwords) |
+| `AUDIT_ENABLED` | `true` | Write access-control records to the structured log |
 
 ---
 
@@ -417,10 +432,10 @@ Week 1 baseline (BM25, 512T chunks):
 ```bash
 # Full suite (Ollama-dependent tests are deselected by default)
 python -m pytest tests/ -q
-# → 205 passed, 3 deselected (ollama markers)
+# → 231 passed, 3 deselected (ollama markers)
 
 # RBAC / governance guardrail suite (no Ollama needed; the load-bearing security tests)
-python -m pytest tests/test_rbac_guardrails.py tests/test_xlsx_and_acl.py -v
+python -m pytest tests/test_rbac_guardrails.py tests/test_auth_hardening.py tests/test_xlsx_and_acl.py -v
 
 # With a local Ollama running, also exercise the live embedding tests
 python -m pytest tests/ -q -m ollama
@@ -459,7 +474,7 @@ scripts/
   seed.py            # index documents / built-in demo corpus
   eval.py            # gold-set evaluation
   smoke_test.py      # live end-to-end API verification
-tests/               # 205 unit tests (incl. RBAC guardrails + xlsx)
+tests/               # 231 unit tests (RBAC guardrails + auth hardening + xlsx)
 Dockerfile           # production image
 docker-compose.yml   # api + ollama + models-init
 .github/workflows/   # CI: lint → test → docker

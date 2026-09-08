@@ -38,6 +38,11 @@ notebooks/*
 # Pytest
 .pytest_cache/
 
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+
 # Local server artifacts
 *.log
 *.pid

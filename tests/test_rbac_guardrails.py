@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 
 from app.auth.acl import filter_by_permission, visibility_filter
 from app.auth.models import ACLMetadata, AuthUser, ClearanceLevel, get_role
-from app.auth.service import AuthService
+from app.auth.service import AuthService, TokenVerificationError
 from retrieval.hybrid import HybridRetriever
 from retrieval.types import RetrievedDocument
 
@@ -128,9 +128,7 @@ class TestPermissionFilterUnit:
         # A manager restricted to ENGINEERING only (no FINANCE) must not see
         # the confidential FINANCE chunk even though clearance allows it.
         role = get_role("manager")
-        user = AuthUser(
-            sub="mgr", name="mgr", role=role, departments={"PUBLIC", "ENGINEERING"}
-        )
+        user = AuthUser(sub="mgr", name="mgr", role=role, departments={"PUBLIC", "ENGINEERING"})
         kept = filter_by_permission(list(corpus.values()), user)
         ids = {d.node_id for d in kept}
         assert "int1" in ids
@@ -138,8 +136,11 @@ class TestPermissionFilterUnit:
 
     def test_metadata_missing_acl_defaults_to_public(self):
         doc = RetrievedDocument(
-            node_id="legacy", text="old chunk", score=0.5,
-            metadata={"source": "legacy.pdf"}, source="sparse",
+            node_id="legacy",
+            text="old chunk",
+            score=0.5,
+            metadata={"source": "legacy.pdf"},
+            source="sparse",
         )
         kept = filter_by_permission([doc], _user("intern"))
         assert [d.node_id for d in kept] == ["legacy"]
@@ -170,9 +171,7 @@ class TestVisibilityFilterUnit:
     def test_allows_principal_departments(self):
         user = _user("manager", departments={"PUBLIC", "ENGINEERING", "FINANCE"})
         w = visibility_filter(None, user)
-        dept_clause = next(
-            c for c in w["$and"] if "department" in c
-        )
+        dept_clause = next(c for c in w["$and"] if "department" in c)
         assert set(dept_clause["department"]["$in"]) == {"PUBLIC", "ENGINEERING", "FINANCE"}
 
     def test_clearance_levels_are_inclusive_prefix(self):
@@ -227,7 +226,9 @@ class TestHybridRetrieverGuard:
         assert all(d.text != SECRET_CHUNK for d in hits)
 
     def test_employee_retrieve_excludes_secret_and_confidential(self, hybrid, corpus):
-        hits = hybrid.retrieve("executive bonuses finance forecast", top_k=20, user=_user("employee"))
+        hits = hybrid.retrieve(
+            "executive bonuses finance forecast", top_k=20, user=_user("employee")
+        )
         ids = {d.node_id for d in hits}
         assert "sec1" not in ids
         assert "conf1" not in ids
@@ -321,9 +322,7 @@ class TestApiGuardrails:
                 dense = _FakeDense(list(corpus.values()))
                 sparse = _FakeSparse(list(corpus.values()))
                 hybrid = HybridRetriever(dense=dense, sparse=sparse)
-                super().__init__(
-                    hybrid=hybrid, researcher=_NullResearcher(), default_final_top_k=5
-                )
+                super().__init__(hybrid=hybrid, researcher=_NullResearcher(), default_final_top_k=5)
                 self._is_ready = True
 
             def is_ready(self):
@@ -377,11 +376,7 @@ class TestApiGuardrails:
         ]:
             r = self._ask(client, token, attack)
             assert r.status_code == 200
-            leaked = [
-                d.get("text")
-                for d in r.json()["search"]
-                if "Acme Corp" in d.get("text", "")
-            ]
+            leaked = [d.get("text") for d in r.json()["search"] if "Acme Corp" in d.get("text", "")]
             assert not leaked, f"SECRET leaked via API query: {attack!r}"
 
     def test_employee_api_excludes_confidential_finance(self, client):
@@ -415,7 +410,7 @@ class TestAuthService:
         svc = AuthService(secret="s")
         token = svc.issue_token("alice", "manager")
         other = AuthService(secret="different")
-        with pytest.raises(jwt.InvalidTokenError):
+        with pytest.raises(TokenVerificationError):
             other.verify(token)
 
     def test_verify_rejects_expired_token(self, monkeypatch):
@@ -424,11 +419,20 @@ class TestAuthService:
         # Craft a token whose exp is already in the past, then verify it.
         svc = AuthService(secret="s", expiry_seconds=1)
         token = svc.issue_token("alice", "manager")
-        payload = jwt.decode(token, "s", algorithms=["HS256"], options={"verify_exp": False})
+        payload = jwt.decode(
+            token,
+            "s",
+            algorithms=["HS256"],
+            options={"verify_exp": False},
+            audience="enterprise-rag",
+        )
         payload["exp"] = int(_time.time()) - 1000
         expired = jwt.encode(payload, "s", algorithm="HS256")
-        with pytest.raises(jwt.ExpiredSignatureError):
+        with pytest.raises(TokenVerificationError) as excinfo:
             svc.verify(expired)
+        # The generic surface stays opaque, but the server-side cause is the
+        # expiry failure - verified here so the distinction is tested.
+        assert isinstance(excinfo.value.__cause__, jwt.ExpiredSignatureError)
 
     def test_unknown_role_defaults_to_intern(self):
         svc = AuthService(secret="s")
@@ -488,7 +492,9 @@ class TestAuthApi:
                 return AuthService(secret="api-test-secret", expiry_seconds=3600)
 
             def user_store(self):
-                return UserStore(path=Path(__file__).resolve().parent.parent / "app" / "auth" / "users.json")
+                return UserStore(
+                    path=Path(__file__).resolve().parent.parent / "app" / "auth" / "users.json"
+                )
 
             def audit(self):
                 return None
@@ -511,18 +517,14 @@ class TestAuthApi:
         assert body["user"]["role"] == "employee"
 
     def test_login_rejects_bad_password(self, client):
-        r = client.post(
-            "/api/v1/auth/login", json={"username": "carol", "password": "wrong"}
-        )
+        r = client.post("/api/v1/auth/login", json={"username": "carol", "password": "wrong"})
         assert r.status_code == 401
 
     def test_me_with_valid_token(self, client):
         token = client.post(
             "/api/v1/auth/login", json={"username": "dave", "password": "intern-password!"}
         ).json()["access_token"]
-        r = client.get(
-            "/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"}
-        )
+        r = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
         assert r.status_code == 200
         assert r.json()["role"] == "intern"
         assert r.json()["max_clearance"] == "PUBLIC"

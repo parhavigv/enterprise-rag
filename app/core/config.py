@@ -11,7 +11,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # nltk ships an import-security hook that blocks dependency imports that
@@ -33,7 +33,7 @@ class Settings(BaseSettings):
 
     # --- App ---
     app_name: str = "enterprise-rag"
-    environment: str = "production"
+    environment: str = "development"  # "development" | "production"
     debug: bool = False
     api_host: str = "0.0.0.0"
     api_port: int = 8000
@@ -107,6 +107,10 @@ class Settings(BaseSettings):
     auth_jwt_algorithm: str = "HS256"
     auth_jwt_expiry_seconds: int = 3600
     auth_issuer: str = "enterprise-rag"
+    auth_audience: str = "enterprise-rag"  # scopes tokens to this service
+    auth_rate_limit_enabled: bool = True
+    auth_rate_limit_max_requests: int = 10  # per window, per client
+    auth_rate_limit_window_seconds: int = 60
 
     # --- Audit ---
     audit_enabled: bool = True
@@ -119,6 +123,25 @@ class Settings(BaseSettings):
     @classmethod
     def _split_formats(cls, v: str) -> str:
         return ",".join(f.strip() for f in v.split(",") if f.strip())
+
+    @model_validator(mode="after")
+    def _enforce_production_credentials(self) -> Settings:
+        """Fail fast when a production deployment lacks a strong JWT secret.
+
+        An ephemeral HMAC secret (the dev default) silently invalidates every
+        token on restart and is guessable; a production operator must supply a
+        long random ``AUTH_JWT_SECRET``. Raising here - at Settings build time -
+        surfaces the misconfiguration at boot instead of as mysterious 401s.
+        """
+        env = self.environment.lower()
+        if env == "production":
+            secret = self.auth_jwt_secret or ""
+            if len(secret) < 32:
+                raise ValueError(
+                    "AUTH_JWT_SECRET must be a random value of at least 32 "
+                    "characters when ENVIRONMENT=production"
+                )
+        return self
 
     @property
     def allowed_formats_list(self) -> list[str]:

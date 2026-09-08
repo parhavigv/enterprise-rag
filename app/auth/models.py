@@ -142,9 +142,20 @@ class ACLMetadata:
 
     @classmethod
     def from_metadata(cls, metadata: dict[str, Any]) -> ACLMetadata:
+        """Coerce a stored metadata dict into ACL values (filtering path).
+
+        Unknown/malformed clearance values default to PUBLIC (the most
+        restrictive reading) so a junk metadata field can never crash a query.
+        Ingestion-time validation is strict (:meth:`merge_defaults`); this is
+        deliberately the tolerant, safe-to-degrade reader.
+        """
+        try:
+            level = ClearanceLevel.parse(metadata.get("clearance_level"))
+        except ValueError:
+            level = ClearanceLevel.PUBLIC
         return cls(
             department=str(metadata.get("department") or "PUBLIC").upper(),
-            clearance_level=ClearanceLevel.parse(metadata.get("clearance_level")),
+            clearance_level=level,
             owner=metadata.get("owner"),
         )
 
@@ -156,15 +167,18 @@ class ACLMetadata:
 
         ``defaults`` may carry ``department`` / ``clearance_level`` / ``owner``
         supplied at ingestion time.
+
+        Raises:
+            ValueError: an explicit clearance level is not one of the known
+                levels. Silently downgrading an unparseable value to PUBLIC
+                would *loosen* a document's access policy - failing fast is the
+                safe behaviour.
         """
         deps = defaults or {}
         out = dict(metadata)
         out["department"] = str(deps.get("department") or out.pop("department", "PUBLIC")).upper()
-        try:
-            raw_level = deps.get("clearance_level") or out.pop("clearance_level", None)
-            cl = ClearanceLevel.parse(raw_level)
-        except ValueError:
-            cl = ClearanceLevel.PUBLIC
+        raw_level = deps.get("clearance_level") or out.pop("clearance_level", None)
+        cl = ClearanceLevel.PUBLIC if raw_level is None else ClearanceLevel.parse(raw_level)
         out["clearance_level"] = cl.name
         out["owner"] = out.get("owner") or deps.get("owner")
         return out

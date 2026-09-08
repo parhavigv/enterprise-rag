@@ -64,6 +64,7 @@ class Container:
                 algorithm=self._settings.auth_jwt_algorithm,
                 expiry_seconds=self._settings.auth_jwt_expiry_seconds,
                 issuer=self._settings.auth_issuer,
+                audience=self._settings.auth_audience,
             ),
         )
 
