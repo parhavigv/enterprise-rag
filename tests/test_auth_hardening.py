@@ -25,7 +25,7 @@ from app.auth.passwords import (
     verify_password,
 )
 from app.auth.service import AuthService, TokenVerificationError
-from app.auth.users import UserStore
+from app.auth.users import JsonUserStore, SqliteUserStore, seed_demo_users
 from app.core.config import Settings
 
 
@@ -146,20 +146,34 @@ class TestProductionConfigGuard:
 # --------------------------------------------------------------------- #
 class TestUserStoreHardening:
     @pytest.fixture(scope="class")
-    def store(self):
-        users_path = Path(__file__).resolve().parent.parent / "app" / "auth" / "users.json"
-        return UserStore(path=users_path)
+    def store(self, tmp_path_factory):
+        db = tmp_path_factory.mktemp("users") / "users.db"
+        store = SqliteUserStore(path=db)
+        seed_demo_users(store)
+        yield store
+        store.close()
 
     def test_stored_hashes_use_pbkdf2(self, store):
+        assert store.users  # seeded
         for user in store.users:
             assert user.password_hash.startswith("$pbkdf2-sha256$")
 
     def test_valid_credentials(self, store):
-        assert store.authenticate("bob", "manager-password!").role == "manager"
+        assert (
+            store.authenticate("bob", "manager-password!", client_ip="127.0.0.1").role == "manager"
+        )
 
     def test_bad_password_and_unknown_user_both_return_none(self, store):
         assert store.authenticate("carol", "wrong") is None
         assert store.authenticate("nobody", "wrong") is None
+
+    def test_legacy_json_registry_still_loads(self):
+        # The shipped users.json must stay in the demo format for AUTH_USER_STORE_BACKEND=json.
+        store = JsonUserStore(
+            path=Path(__file__).resolve().parent.parent / "app" / "auth" / "users.json"
+        )
+        assert {u.username for u in store.users} == {"alice", "bob", "carol", "dave"}
+        assert store.authenticate("alice", "admin-password!").role == "admin"
 
 
 # --------------------------------------------------------------------- #
@@ -167,12 +181,15 @@ class TestUserStoreHardening:
 # --------------------------------------------------------------------- #
 class TestApiHardening:
     @pytest.fixture()
-    def client(self):
+    def client(self, tmp_path):
         from types import SimpleNamespace
 
         from app.api.deps import get_container
         from app.auth.service import AuthService
         from app.main import create_app
+
+        store = SqliteUserStore(path=tmp_path / "users.db")
+        seed_demo_users(store)
 
         class _Container:
             settings = SimpleNamespace(
@@ -203,8 +220,7 @@ class TestApiHardening:
                 return AuthService(secret="api-test-secret", expiry_seconds=3600)
 
             def user_store(self):
-                users_path = Path(__file__).resolve().parent.parent / "app" / "auth" / "users.json"
-                return UserStore(path=users_path)
+                return store
 
             def audit(self):
                 return None
@@ -215,6 +231,7 @@ class TestApiHardening:
         with TestClient(app) as c:
             c.app.state.container = fake
             yield c
+        store.close()
 
     def test_invalid_token_401_is_generic_with_challenge(self, client):
         r = client.get("/api/v1/auth/me", headers={"Authorization": "Bearer junk.token.value"})

@@ -11,8 +11,9 @@ from __future__ import annotations
 from typing import Annotated
 
 import jwt
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
+from app.api.deps import get_container
 from app.api.models import LoginRequest, TokenResponse
 from app.api.rate_limit import rate_limit
 from app.auth.dependencies import get_auth_service, get_current_user, get_user_store
@@ -20,6 +21,7 @@ from app.auth.models import AuthUser
 from app.auth.service import AuthService
 from app.auth.users import UserStore
 from app.core.logging import get_logger
+from app.services.container import Container
 
 logger = get_logger(__name__)
 
@@ -36,15 +38,35 @@ _WWW_AUTH = {"WWW-Authenticate": "Bearer"}
 )
 def login(
     req: LoginRequest,
+    request: Request,
     service: AuthService = Depends(get_auth_service),
     store: UserStore = Depends(get_user_store),
+    container: Container = Depends(get_container),
 ) -> TokenResponse:
-    user = store.authenticate(req.username, req.password)
+    client_ip = request.client.host if request.client else None
+    user = store.authenticate(req.username, req.password, client_ip=client_ip)
+    audit = getattr(container, "audit", lambda: None)()
     if user is None:
+        if audit is not None:
+            audit.log_auth_result(
+                actor=req.username,
+                role=None,
+                success=False,
+                client_ip=client_ip,
+                reason="invalid credentials",
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password.",
             headers=_WWW_AUTH,
+        )
+    if audit is not None:
+        audit.log_auth_result(
+            actor=user.username,
+            role=user.role,
+            success=True,
+            client_ip=client_ip,
+            reason=None,
         )
     token = service.issue_token(
         subject=user.username,

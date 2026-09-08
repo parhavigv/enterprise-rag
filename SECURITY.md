@@ -27,22 +27,32 @@ The following are in scope:
 - Injection into the retrieval pipeline: metadata or ingested content shaping
   filters, prompts, or queries in unintended ways.
 
-Out of scope: the static developer user store (`app/auth/users.json`) is a
-dev/test stand-in, not a production identity source. Production deployments
-must replace `UserStore` with an IdP or a real identity table.
+The identity store defaults to a durable SQLite database
+(`data/users.db` — schema, PBKDF2 credential hashing, account lockout and a
+`login_attempts` audit trail). It is a sound identity source for a
+single-instance deployment. It is **not** an IdP: multi-service/SSO systems
+must replace the `UserStore` seam with Okta, Entra ID, Keycloak (OIDC) or a
+central user table, and provision accounts centrally rather than via the
+bundled `scripts/manage_users.py`.
 
 ## Deployment hardening checklist
 
 1. Set `ENVIRONMENT=production`. The app will refuse to start without a strong
    `AUTH_JWT_SECRET` (>= 32 random characters).
-2. Do **not** reuse the default dev user records or `*-password!` passwords.
-3. Terminate TLS at the ingress; the API itself speaks HTTP.
-4. Run the API behind a distributed rate limiter / WAF in multi-node
+2. Do **not** rely on the auto-seeded demo accounts or `*-password!`
+   passwords: `AUTH_SEED_DEMO_USERS` is only honoured outside production.
+   Provision real accounts with `python -m scripts.manage_users` before
+   exposing the service.
+3. Back up `data/users.db` / its WAL as part of disaster recovery; a lost DB
+   means lost accounts.
+4. Terminate TLS at the ingress; the API itself speaks HTTP.
+5. Run the API behind a distributed rate limiter / WAF in multi-node
    deployments (`AUTH_RATE_LIMIT_ENABLED=false` to hand off to it).
-5. Scrub the JWT secret from image layers: pass it via orchestration secrets,
+6. Scrub the JWT secret from image layers: pass it via orchestration secrets,
    never bake it into the image or an `.env` file committed to git.
-6. Keep audit records (`/audit/access` + structured logs) out of the public
-   image; stream them to an aggregator (Splunk, ELK, CloudWatch).
+7. Keep audit records (`/audit/access`, structured logs, `login_attempts`)
+   out of the public image; stream them to an aggregator (Splunk, ELK,
+   CloudWatch).
 
 ## Supported versions
 

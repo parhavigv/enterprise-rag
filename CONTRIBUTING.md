@@ -16,9 +16,10 @@ copy .env.example .env          # Windows (Linux/macOS: cp .env.example .env)
 Run the app and check the matrices:
 
 ```bash
-python -m pytest tests/ -q                      # full suite (231 tests)
+python -m pytest tests/ -q                      # full suite (262 tests)
 python -m pytest tests/test_rbac_guardrails.py -v
 python -m pytest tests/test_auth_hardening.py -v
+python -m pytest tests/test_user_store_sqlite.py -v
 python -m ruff check .                          # lint
 python -m ruff format --check .                 # formatting
 ```
@@ -32,7 +33,10 @@ python -m ruff format --check .                 # formatting
 - **Fail loudly.** Do not silently downgrade sensitive state (e.g. an invalid
   clearance level) to a looser default.
 - **No secrets in the repo.** `AUTH_JWT_SECRET`, API keys, and `.env` never
-  enter git. Dev user records are hashed PBKDF2 placeholders only.
+  enter git. Account stores are PBKDF2-hashed; identity data lives in the
+  gitignored `data/users.db`, and the legacy `users.json` holds hashed
+  placeholders only. Provision accounts via `python -m scripts.manage_users`,
+  never by pasting secrets into tracked files.
 - **Style.** Black-ish, 100 columns, enforced by ruff (`line-length = 100`).
   Docstrings on public modules/classes; changes must pass `ruff check` and
   `ruff format --check`.

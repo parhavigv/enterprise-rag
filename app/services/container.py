@@ -10,7 +10,7 @@ from app.agents.llm_client import AsyncLLMClient
 from app.agents.researcher import ResearcherAgent
 from app.auth.audit import AuditLogger
 from app.auth.service import AuthService
-from app.auth.users import UserStore
+from app.auth.users import UserStore, build_user_store, seed_demo_users
 from app.core.cache import TTLCache
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
@@ -69,7 +69,18 @@ class Container:
         )
 
     def user_store(self) -> UserStore:
-        return self._memo("user_store", UserStore)
+        store = self._memo("user_store", build_user_store, self._settings)
+        # Auto-provision demo identities on an empty store - development only.
+        # Production deployments must provision accounts explicitly (see
+        # scripts/manage_users.py) or wire an IdP behind the UserStore seam.
+        if (
+            self._settings.environment != "production"
+            and getattr(self._settings, "auth_seed_demo_users", True)
+            and callable(getattr(store, "create_user", None))
+            and store.is_empty()
+        ):
+            seed_demo_users(store)
+        return store
 
     def audit(self) -> AuditLogger:
         return self._memo("audit", lambda: AuditLogger(enabled=self._settings.audit_enabled))

@@ -9,9 +9,10 @@ health probes, structured logging, caching, and CI.
 > access-control plane that sits *between retrieval and generation*, preventing
 > low-clearance users from ever surfacing sensitive chunks — enforced **pre-retrieval**
 > (before fusion / re-ranking), not as a post-hoc filter. Includes JWT authentication,
-> document-level ACL metadata, audit logging, an Excel (.xlsx) parser, and an adversarial
-> guardrail test suite proving the no-leakage property. The original 146-test platform is
-> inherited as infrastructure; the RBAC/governance layer adds ~85 focused tests.
+> document-level ACL metadata, audit logging, an Excel (.xlsx) parser, account lockout
+> on a durable SQLite identity store, and an adversarial guardrail test suite proving the
+> no-leakage property. The original 146-test platform is
+> inherited as infrastructure; the RBAC/governance layer adds ~116 focused tests.
 
 **Author:** Parhavi G.V | Senior AI Engineer
 **Stack:** Python 3.10 · FastAPI · LlamaIndex · ChromaDB · BM25Okapi · nomic-embed-text · sentence-transformers · Ollama · OpenAI (GPT-4o/4.1, Whisper) · Docker · PyJWT · openpyxl
@@ -159,10 +160,15 @@ re-ranking, so disallowed chunks never enter the candidate pool the LLM sees:
 
 ### Authentication
 
-`POST /api/v1/auth/login` exchanges credentials for a JWT (recorded in `app/auth/users.json`;
-in production these would come from an IdP / DB). All `/query`, `/search`, `/ingest`, and
-`/upload` routes require `Authorization: Bearer <token>`. Set `AUTH_ENABLED=false` to run
-unsecured (development only). The dev user store ships with four accounts:
+`POST /api/v1/auth/login` exchanges credentials for a JWT. Identities live in a
+durable SQLite store (`data/users.db`, schema created on first boot); in
+non-production environments an empty store is auto-seeded with the demo
+accounts below, and you can manage accounts with `python -m scripts.manage_users`
+(never pass passwords on the command line - the CLI prompts for them). Set
+`AUTH_USER_STORE_BACKEND=json` to fall back to the legacy
+`app/auth/users.json` registry (read-only). All `/query`, `/search`, `/ingest`,
+and `/upload` routes require `Authorization: Bearer <token>`. Set
+`AUTH_ENABLED=false` to run unsecured (development only).
 
 | Username | Role | Password |
 |----------|------|----------|
@@ -180,7 +186,9 @@ unsecured (development only). The dev user store ships with four accounts:
 | Secret enforcement | `ENVIRONMENT=production` refuses to boot without `AUTH_JWT_SECRET` ≥ 32 chars |
 | 401 handling | Generic client detail + `WWW-Authenticate: Bearer`; decode internals only go to server logs |
 | Brute-force defence | Sliding-window rate limit on `/login` and `/token-info` (`429` + `Retry-After`) |
+| Account lockout | SQLite identity store locks an account after N consecutive failures (`AUTH_LOCKOUT_MAX_ATTEMPTS`) for a cooldown window; every attempt is recorded to a `login_attempts` audit table |
 | Fail-safe ACLs | Invalid clearance at ingestion fails loudly (422) instead of silently downgrading to public; the retrieval-time reader degrades to public-only |
+| Identity storage | Durable SQLite user store (`data/users.db`, case-insensitive unique names, PBKDF2 hashes, WAL); legacy `users.json` registry available via `AUTH_USER_STORE_BACKEND=json` |
 
 ---
 
@@ -362,7 +370,7 @@ docker compose up --build -d
 `.github/workflows/ci.yml` runs on `main`/`master`:
 
 1. **Lint** — `ruff check` + `ruff format --check` (line length 100).
-2. **Unit tests** — full pytest suite (231 tests, 76% coverage gate); Ollama-dependent
+2. **Unit tests** — full pytest suite (262 tests, 77% coverage gate); Ollama-dependent
    tests are marker-deselected in CI (`-m "not ollama"`).
 3. **Docker build** — verifies the image builds and healthchecks pass.
 
@@ -398,7 +406,11 @@ Everything is driven by environment variables (see `.env.example`). Key settings
 | `AUTH_RATE_LIMIT_ENABLED` | `true` | Throttle `/login` + `/token-info` (per IP, sliding window) |
 | `AUTH_RATE_LIMIT_MAX_REQUESTS` | `10` | Requests allowed per window, per client |
 | `AUTH_RATE_LIMIT_WINDOW_SECONDS` | `60` | Rate-limit window length |
-| `AUTH_USERS_PATH` | `app/auth/users.json` | Dev user store (PBKDF2-hashed passwords) |
+| `AUTH_USER_STORE_BACKEND` | `sqlite` | Identity store: `sqlite` (default, durable) or `json` (legacy dev registry) |
+| `AUTH_SQLITE_PATH` | `./data/users.db` | SQLite identity store location |
+| `AUTH_LOCKOUT_MAX_ATTEMPTS` | `5` | Consecutive failures before an account locks |
+| `AUTH_LOCKOUT_SECONDS` | `300` | Lockout cooldown window |
+| `AUTH_SEED_DEMO_USERS` | `true` | Auto-provision demo accounts on an empty store (never in production) |
 | `AUDIT_ENABLED` | `true` | Write access-control records to the structured log |
 
 ---
@@ -432,7 +444,7 @@ Week 1 baseline (BM25, 512T chunks):
 ```bash
 # Full suite (Ollama-dependent tests are deselected by default)
 python -m pytest tests/ -q
-# → 231 passed, 3 deselected (ollama markers)
+# → 262 passed, 3 deselected (ollama markers)
 
 # RBAC / governance guardrail suite (no Ollama needed; the load-bearing security tests)
 python -m pytest tests/test_rbac_guardrails.py tests/test_auth_hardening.py tests/test_xlsx_and_acl.py -v
@@ -474,7 +486,7 @@ scripts/
   seed.py            # index documents / built-in demo corpus
   eval.py            # gold-set evaluation
   smoke_test.py      # live end-to-end API verification
-tests/               # 231 unit tests (RBAC guardrails + auth hardening + xlsx)
+tests/               # 262 unit tests (RBAC guardrails + auth hardening + identity store)
 Dockerfile           # production image
 docker-compose.yml   # api + ollama + models-init
 .github/workflows/   # CI: lint → test → docker

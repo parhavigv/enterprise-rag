@@ -111,6 +111,12 @@ class Settings(BaseSettings):
     auth_rate_limit_enabled: bool = True
     auth_rate_limit_max_requests: int = 10  # per window, per client
     auth_rate_limit_window_seconds: int = 60
+    # Identity store: "sqlite" (default, durable) | "json" (legacy dev registry).
+    auth_user_store_backend: str = "sqlite"
+    auth_sqlite_path: str = ""  # empty -> {data_dir}/users.db
+    auth_lockout_max_attempts: int = 5  # consecutive failures before lockout
+    auth_lockout_seconds: int = 300
+    auth_seed_demo_users: bool = True  # dev auto-provisioning (never in production)
 
     # --- Audit ---
     audit_enabled: bool = True
@@ -123,6 +129,13 @@ class Settings(BaseSettings):
     @classmethod
     def _split_formats(cls, v: str) -> str:
         return ",".join(f.strip() for f in v.split(",") if f.strip())
+
+    @field_validator("auth_user_store_backend")
+    @classmethod
+    def _validate_user_store_backend(cls, v: str) -> str:
+        if v.strip().lower() not in ("sqlite", "json"):
+            raise ValueError("AUTH_USER_STORE_BACKEND must be 'sqlite' or 'json'")
+        return v.strip().lower()
 
     @model_validator(mode="after")
     def _enforce_production_credentials(self) -> Settings:

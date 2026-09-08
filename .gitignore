@@ -25,6 +25,11 @@ data/raw/*
 data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+# SQLite identity store
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
 
 # Notebooks checkpoints
 notebooks/*

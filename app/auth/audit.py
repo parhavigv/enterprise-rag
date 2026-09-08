@@ -61,3 +61,29 @@ class AuditLogger:
             resource,
             reason,
         )
+
+    def log_auth_result(
+        self,
+        *,
+        actor: str | None,
+        role: str | None,
+        success: bool,
+        client_ip: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """Record an authentication outcome (login success/failure)."""
+        if not self._enabled:
+            return
+        record: dict[str, Any] = {
+            "event": "auth.login",
+            "actor": actor or "unknown",
+            "role": role or "n/a",
+            "success": success,
+            "client_ip": client_ip or "unknown",
+            "reason": reason,
+            "ts": time.time(),
+        }
+        (logger.info if success else logger.warning)(
+            "{event} | actor={actor} | role={role} | success={success} | client_ip={client_ip}",
+            **record,
+        )

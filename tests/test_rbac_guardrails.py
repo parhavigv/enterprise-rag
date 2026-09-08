@@ -452,14 +452,16 @@ class TestAuthService:
 # --------------------------------------------------------------------- #
 class TestAuthApi:
     @pytest.fixture()
-    def client(self):
-        from pathlib import Path
+    def client(self, tmp_path):
         from types import SimpleNamespace
 
         from app.api.deps import get_container
         from app.auth.service import AuthService
-        from app.auth.users import UserStore
+        from app.auth.users import SqliteUserStore, seed_demo_users
         from app.main import create_app
+
+        store = SqliteUserStore(path=tmp_path / "users.db")
+        seed_demo_users(store)
 
         class _HealthyContainer:
             settings = SimpleNamespace(
@@ -492,9 +494,7 @@ class TestAuthApi:
                 return AuthService(secret="api-test-secret", expiry_seconds=3600)
 
             def user_store(self):
-                return UserStore(
-                    path=Path(__file__).resolve().parent.parent / "app" / "auth" / "users.json"
-                )
+                return store
 
             def audit(self):
                 return None
@@ -505,6 +505,7 @@ class TestAuthApi:
         with TestClient(app) as c:
             c.app.state.container = fake
             yield c
+        store.close()
 
     def test_login_issues_token_for_valid_user(self, client):
         r = client.post(
