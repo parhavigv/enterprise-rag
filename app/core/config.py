@@ -98,8 +98,19 @@ class Settings(BaseSettings):
 
     # --- Ingestion ---
     default_chunk_size: str = "512T"
-    allowed_formats: str = "pdf,docx,txt,url"
+    allowed_formats: str = "pdf,docx,txt,url,xlsx"
     uploads_dir: str = "./data/uploads"
+
+    # --- RBAC / Auth ---
+    auth_enabled: bool = True
+    auth_jwt_secret: str = ""  # empty -> ephemeral secret (tokens don't survive restarts)
+    auth_jwt_algorithm: str = "HS256"
+    auth_jwt_expiry_seconds: int = 3600
+    auth_issuer: str = "enterprise-rag"
+
+    # --- Audit ---
+    audit_enabled: bool = True
+    audit_log_path: str = ""  # empty -> uses the structured log pipeline
 
     # --- Persistence for local dev ---
     data_dir: str = "./data"

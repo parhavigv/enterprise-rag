@@ -10,6 +10,7 @@ import argparse
 import time
 from pathlib import Path
 
+from app.auth.models import ACLMetadata
 from app.core.config import get_settings
 from app.core.errors import IngestionError, InvalidInputError
 from app.core.logging import get_logger
@@ -32,12 +33,20 @@ def run_ingestion(
     adapter: ChromaAdapter | None = None,
     bm25_index_path: str | None = None,
     source_name: str | None = None,
+    department: str | None = None,
+    clearance_level: str | None = None,
+    owner: str | None = None,
 ) -> dict:
     """Run the full ingestion pipeline and return structured metrics.
 
     ``source_name`` (e.g. the original upload filename) overrides each
     document's ``metadata["source"]`` so downstream source filtering and
     citations refer to a human-friendly label.
+
+    ``department`` / ``clearance_level`` / ``owner`` are the document-level
+    ACL metadata applied to every chunk produced by this run. Chunks default
+    to ``PUBLIC`` / ``public`` when omitted so legacy ingestion never blocks
+    legitimate queries.
 
     Raises:
         InvalidInputError: unknown format or unusable source.
@@ -47,6 +56,14 @@ def run_ingestion(
         raise InvalidInputError(
             f"Unsupported format '{fmt}'. Allowed: {', '.join(sorted(PARSERS))}"
         )
+
+    acl_defaults: dict = {}
+    if department:
+        acl_defaults["department"] = department
+    if clearance_level:
+        acl_defaults["clearance_level"] = clearance_level
+    if owner:
+        acl_defaults["owner"] = owner
 
     metrics: dict = {}
     t_total = time.perf_counter()
@@ -61,6 +78,9 @@ def run_ingestion(
 
         logger.info("[2/5] Chunking with config={} ...", chunk_size)
         nodes = chunk_documents(docs, config=chunk_size)
+        if acl_defaults:
+            for node in nodes:
+                node.metadata = ACLMetadata.merge_defaults(node.metadata or {}, acl_defaults)
         metrics["chunks"] = len(nodes)
 
         logger.info("[3/5] Embedding {} chunks ...", len(nodes))
@@ -115,6 +135,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--chunk-size", default="512T")
     p.add_argument("--collection-name", default="enterprise_rag")
     p.add_argument("--rebuild-bm25", action="store_true")
+    p.add_argument("--source-name", help="Human-friendly source label (defaults to path)")
+    p.add_argument("--department", default="PUBLIC", help="Owning department (ACL metadata)")
+    p.add_argument("--clearance-level", default="public",
+                   help="Sensitivity: public | internal | confidential | secret")
+    p.add_argument("--owner", help="Document owner (ACL metadata)")
     return p
 
 
@@ -127,6 +152,10 @@ if __name__ == "__main__":
             chunk_size=args.chunk_size,
             collection_name=args.collection_name,
             rebuild_bm25=args.rebuild_bm25,
+            source_name=args.source_name,
+            department=args.department,
+            clearance_level=args.clearance_level,
+            owner=args.owner,
         )
     except InvalidInputError as e:
         logger.error(str(e))

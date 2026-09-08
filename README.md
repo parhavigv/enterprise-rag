@@ -5,8 +5,16 @@ hybrid retrieval (dense + sparse fused with Reciprocal Rank Fusion), cross-encod
 re-ranking, and grounded LLM answers — exposed as a containerised FastAPI service with
 health probes, structured logging, caching, and CI.
 
+> **Extended with an enterprise RBAC / governance layer** (this contribution): an
+> access-control plane that sits *between retrieval and generation*, preventing
+> low-clearance users from ever surfacing sensitive chunks — enforced **pre-retrieval**
+> (before fusion / re-ranking), not as a post-hoc filter. Includes JWT authentication,
+> document-level ACL metadata, audit logging, an Excel (.xlsx) parser, and an adversarial
+> guardrail test suite proving the no-leakage property. The original 146-test platform is
+> inherited as infrastructure; the RBAC layer adds ~59 focused tests.
+
 **Author:** Parhavi G.V | Senior AI Engineer
-**Stack:** Python 3.10 · FastAPI · LlamaIndex · ChromaDB · BM25Okapi · nomic-embed-text · sentence-transformers · Ollama · OpenAI (GPT-4o/4.1, Whisper) · Docker
+**Stack:** Python 3.10 · FastAPI · LlamaIndex · ChromaDB · BM25Okapi · nomic-embed-text · sentence-transformers · Ollama · OpenAI (GPT-4o/4.1, Whisper) · Docker · PyJWT · openpyxl
 
 ---
 
@@ -15,9 +23,10 @@ health probes, structured logging, caching, and CI.
 ```
                     ┌────────────────────────────────────────────────────────┐
                     │                     FastAPI service                    │
+                    │  /api/v1/auth/login   /api/v1/auth/me                  │
                     │  /api/v1/ingest  /api/v1/upload  /api/v1/search       │
                     │  /api/v1/query  /api/v1/transcribe  /health           │
-                    │  /health/ready  /api/v1/stats                         │
+                    │  /health/ready  /api/v1/stats  /api/v1/audit/access   │
                     │  /ui  (modern browser workspace)                      │
                     └───────┬───────────────┬────────────────┬───────────────┘
                             │               │                │
@@ -26,13 +35,20 @@ health probes, structured logging, caching, and CI.
         ┌─────────────────┐ │   ┌────────────────────┐  ┌──────────────────┐
         │ Parser +        │ │   │ HybridRetriever    │  │ ResearcherAgent  │
         │ SemanticChunker │ │   │  ├ Dense (ChromaDB)│  │  └ AsyncLLMClient│
-        └───────┬─────────┘ │   │  └ Sparse (BM25)   │  │   (Ollama/OpenAI)│
-                ▼           │   └────────┬───────────┘  └──────────────────┘
+        │ + ACL metadata  │ │   │  └ Sparse (BM25)   │  │   (Ollama/OpenAI)│
+        └───────┬─────────┘ │   └────────┬───────────┘  └──────────────────┘
+                ▼           │            │
         ┌─────────────────┐ │            ▼
         │ OllamaEmbedder  │ │   ┌────────────────────┐
         │ (nomic-embed-   │ │   │ CrossEncoderReranker│
         │  text, 768d)    │ │   └────────────────────┘
-        └─────────────────┘ │
+        └─────────────────┘ │            │
+                            │            ▼
+                            │   ┌────────────────────┐
+                            │   │ AuthService (JWT)  │
+                            │   │  → AuthUser role   │
+                            │   │  → ACL filter      │
+                            │   └────────────────────┘
                             │   in-memory TTL cache (query responses)
 ```
 
@@ -40,13 +56,21 @@ health probes, structured logging, caching, and CI.
   Ollama embedder → ChromaDB upsert → BM25 incremental merge pipeline (new chunks are
   merged into the persisted BM25 corpus instead of a full rebuild). PDFs also get
   **best-effort OCR** of embedded images (PyMuPDF + RapidOCR), so scanned documents are
-  searchable too.
+  searchable too. **New:** Excel (`.xlsx`/`.xlsm`) parsing and chunk-level **ACL
+  metadata** tagging (`department`, `clearance_level`, `owner`).
 - **Retrieval** — `retrieval/hybrid/hybrid_retriever.py` fuses dense hits (ChromaDB,
   cosine) with sparse hits (BM25Okapi) via RRF, then `retrieval/reranker/cross_encoder.py`
-  re-orders the top candidates.
+  re-orders the top candidates. **New:** pre-retrieval permission filtering removes any
+  chunk the requester is not cleared to read *before* fusion / re-ranking — a dense
+  metadata gate (`clearance_level` + `department`) plus a defensive sweep over the fused
+  pool.
+- **Access control** — `app/auth/` issues JWTs (`AuthService`), enforces a
+  role→clearance model (`Role`, `ClearanceLevel`), tags documents with `ACLMetadata`,
+  filters candidates in `acl.py`, and logs every decision in `audit.py`.
 - **Answering** — `app/agents/researcher.py` builds a grounded prompt from the cited
   passages and streams through `app/agents/llm_client.py` (Ollama or OpenAI; multimodal
-  images supported), with an extractive fallback when the LLM is unavailable.
+  images supported), with an extractive fallback when the LLM is unavailable. The model
+  only ever sees chunks the requester was permitted to retrieve.
 - **Voice** — `app/api/routes/speech.py` transcribes browser-recorded audio via OpenAI
   Whisper so you can ask questions by speaking.
 - **Serving** — `app/main.py` app factory with CORS, request-ID propagation, structured
@@ -97,6 +121,58 @@ Interactive docs: <http://127.0.0.1:8000/docs>.
 
 ---
 
+## RBAC / Governance layer
+
+### Permission model
+
+A chunk is readable by a user iff **both** hold:
+
+| Condition | Rule |
+|-----------|------|
+| Clearance | `chunk.clearance_level ≤ user.role.max_clearance` |
+| Department | `chunk.department ∈ user.role.departments` (or the user is an admin) |
+
+Sensitivity ladder: **public < internal < confidential < secret** — each role grants a
+max clearance and an allow-list of departments.
+
+| Role | Max clearance | Departments |
+|------|---------------|-------------|
+| `intern` | public | public |
+| `employee` | internal | public, engineering, product, ops |
+| `manager` | confidential | + finance, hr |
+| `executive` | secret | + legal |
+| `admin` | secret | unrestricted (bypasses all filters) |
+
+### Enforcement point (pre-retrieval)
+
+Filtering happens in `HybridRetriever` **before** RRF fusion and cross-encoder
+re-ranking, so disallowed chunks never enter the candidate pool the LLM sees:
+
+1. **Dense gate** — `DenseRetriever` pushes a ChromaDB metadata `where` clause
+   (`clearance_level ∈ allowed` + `department ∈ visible`) so the vector store only
+   returns permitted chunks.
+2. **Defensive sweep** — `filter_by_permission` re-checks dense hits, sparse hits, and
+   the final fused pool against the requesting `AuthUser`. With no auth context the
+   safest default (public-only) applies.
+3. **Audit** — every retrieval records actor, role, query, candidates requested /
+   returned / filtered into the structured log.
+
+### Authentication
+
+`POST /api/v1/auth/login` exchanges credentials for a JWT (recorded in `app/auth/users.json`;
+in production these would come from an IdP / DB). All `/query`, `/search`, `/ingest`, and
+`/upload` routes require `Authorization: Bearer <token>`. Set `AUTH_ENABLED=false` to run
+unsecured (development only). The dev user store ships with four accounts:
+
+| Username | Role | Password |
+|----------|------|----------|
+| `alice` | admin | `admin-password!` |
+| `bob` | manager | `manager-password!` |
+| `carol` | employee | `employee-password!` |
+| `dave` | intern | `intern-password!` |
+
+---
+
 ## API Reference
 
 All business endpoints live under `/api/v1`.
@@ -104,7 +180,8 @@ All business endpoints live under `/api/v1`.
 ### `POST /api/v1/query`
 Full RAG round-trip: hybrid retrieve → (optional) rerank → grounded LLM answer.
 Supports per-request **provider/model overrides** and **vision chat** (attach
-base64 images that are sent to the model alongside the question).
+base64 images that are sent to the model alongside the question). When auth is
+enabled, the caller's JWT scopes retrieval to permitted chunks.
 
 ```jsonc
 // Request
@@ -146,28 +223,35 @@ curl -X POST http://127.0.0.1:8000/api/v1/transcribe -F "file=@question.webm"
 Retrieval-only variant of `/query` (`generate: false`), returning the same `search` array.
 
 ### `POST /api/v1/ingest`
-Parse, chunk, embed, and index a document or URL.
+Parse, chunk, embed, and index a document or URL. Supports optional ACL metadata so a
+document is born with its governance tags (defaults: `department: "public"`,
+`clearance_level: "public"`, `owner: null`).
 
 ```jsonc
 {
   "path": "./data/raw/sample.pdf",   // or https://...
-  "format": "pdf",                   // pdf | docx | txt | url
+  "format": "pdf",                   // pdf | docx | txt | url | xlsx
   "chunk_size": "512T",              // 256T | 512T | 1024T
   "collection_name": "enterprise_rag",
   "rebuild_bm25": false,
-  "background": false                // true → returns immediately, runs as a task
+  "background": false,               // true → returns immediately, runs as a task
+  "department": "finance",           // optional ACL metadata
+  "clearance_level": "confidential", // public | internal | confidential | secret
+  "owner": "bob"                     // optional document owner
 }
 ```
 
 ### `POST /api/v1/upload`
 Multipart file upload — the browser-friendly way to add documents. Accepts
-`.pdf`, `.docx`, `.txt`, `.md`, `.markdown`, `.csv`, and `.json` (up to 50 MB).
-The file is staged, parsed, chunked, embedded, and indexed into both dense and
-BM25 stores, then deleted. Returns the same metrics as `/ingest`.
+`.pdf`, `.docx`, `.txt`, `.md`, `.markdown`, `.csv`, `.json`, and `.xlsx`/`.xlsm`
+(up to 50 MB). The file is staged, parsed, chunked, embedded, and indexed into both dense
+and BM25 stores, then deleted. Returns the same metrics as `/ingest`. ACL metadata is
+accepted as extra form fields (`department`, `clearance_level`, `owner`).
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/upload ^
-  -F "file=@guide.txt" -F "chunk_size=512T"
+  -F "file=@guide.txt" -F "chunk_size=512T" ^
+  -F "department=engineering" -F "clearance_level=internal"
 ```
 
 ```jsonc
@@ -215,6 +299,32 @@ curl -X PUT http://127.0.0.1:8000/api/v1/settings ^
 }
 ```
 
+### `POST /api/v1/auth/login`
+Exchange credentials for a JWT access token.
+
+```jsonc
+// Request
+{ "username": "bob", "password": "manager-password!" }
+
+// Response
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIs...",
+  "token_type": "bearer",
+  "expires_in": 3600,
+  "user": { "username": "bob", "role": "manager",
+            "departments": [..., "finance"], "max_clearance": "confidential" }
+}
+```
+
+### `GET /api/v1/auth/me`
+Return the identity, role, and effective permissions of the calling user
+(`Authorization: Bearer <token>`).
+
+### `GET /api/v1/audit/access`
+Admin/executive-only: recent access-control decisions (who queried what, how many
+candidates were permitted vs. filtered). Requires `Authorization: Bearer <token>` with
+an `admin` or `executive` role.
+
 ### Health
 - `GET /health` — liveness (always 200 when the process is up).
 - `GET /health/ready` — readiness; 200 only when Chroma, BM25, and the Ollama embedder
@@ -241,7 +351,7 @@ docker compose up --build -d
 `.github/workflows/ci.yml` runs on `main`/`master`:
 
 1. **Lint** — `ruff check` + `ruff format --check` (line length 100).
-2. **Unit tests** — full pytest suite (146 tests); Ollama-dependent tests are
+2. **Unit tests** — full pytest suite (205 tests); Ollama-dependent tests are
    marker-deselected in CI (`-m "not ollama"`).
 3. **Docker build** — verifies the image builds and healthchecks pass.
 
@@ -269,6 +379,12 @@ Everything is driven by environment variables (see `.env.example`). Key settings
 | `CACHE_ENABLED` / `CACHE_TTL_SECONDS` | `true` / `600` | In-memory response cache |
 | `LOG_FORMAT` | `json` | `json` (prod) or `console` (dev) |
 | `CHROMA_SERVER_ENABLED` | `false` | Use embedded Chroma (`true` for a remote server) |
+| `AUTH_ENABLED` | `true` | Require JWT on query / ingest routes (`false` = dev only) |
+| `AUTH_JWT_SECRET` | `change-me-...` | HMAC-SHA256 key for signing access tokens |
+| `AUTH_JWT_ALGORITHM` | `HS256` | JWT signing algorithm |
+| `AUTH_JWT_EXPIRE_SECONDS` | `3600` | Access-token lifetime |
+| `AUTH_USERS_PATH` | `app/auth/users.json` | Dev user store (users + hashed passwords) |
+| `AUDIT_LEVEL` | `info` | `info` or `debug` access-control audit verbosity |
 
 ---
 
@@ -301,6 +417,10 @@ Week 1 baseline (BM25, 512T chunks):
 ```bash
 # Full suite (Ollama-dependent tests are deselected by default)
 python -m pytest tests/ -q
+# → 205 passed, 3 deselected (ollama markers)
+
+# RBAC / governance guardrail suite (no Ollama needed; the load-bearing security tests)
+python -m pytest tests/test_rbac_guardrails.py tests/test_xlsx_and_acl.py -v
 
 # With a local Ollama running, also exercise the live embedding tests
 python -m pytest tests/ -q -m ollama
@@ -319,26 +439,27 @@ python -m ruff format --check .
 
 ```
 app/                 # FastAPI service
-  api/               # routes (health, query, ingest, speech), Pydantic schemas, deps
+  api/               # routes (health, query, ingest, speech, auth, audit), Pydantic schemas, deps
   core/              # config, logging, errors, cache
   services/          # container (DI), query service, ingest service
   agents/            # LLM client (multimodal), researcher agent
+  auth/              # RBAC layer: models, JWT service, ACL filter, audit, user store
 ingestion/
-  parsers/           # pdf (with OCR), docx, txt, url
+  parsers/           # pdf (with OCR), docx, txt, url, xlsx (openpyxl)
   chunkers/          # semantic chunker + size config
   embedders/         # Ollama embedder (retries, health), nomic facade
   ingest.py          # run_ingestion() pipeline
 retrieval/
-  dense/             # ChromaDB adapter
+  dense/             # ChromaDB adapter (+ ACL visibility filter)
   bm25/              # BM25Okapi indexer (persisted)
-  hybrid/            # RRF fusion
+  hybrid/            # RRF fusion (+ pre-fusion ACL sweep)
   reranker/          # cross-encoder
   vector_store/      # ChromaAdapter
 scripts/
   seed.py            # index documents / built-in demo corpus
   eval.py            # gold-set evaluation
   smoke_test.py      # live end-to-end API verification
-tests/               # 146 unit tests
+tests/               # 205 unit tests (incl. RBAC guardrails + xlsx)
 Dockerfile           # production image
 docker-compose.yml   # api + ollama + models-init
 .github/workflows/   # CI: lint → test → docker

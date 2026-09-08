@@ -8,12 +8,16 @@ import re
 import tempfile
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from rank_bm25 import BM25Okapi
 
 from retrieval.types import RetrievedDocument
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.auth.models import AuthUser
 
 DEFAULT_INDEX_PATH = Path(os.getenv("BM25_INDEX_PATH", "./bm25_index.pkl"))
 _PUNCTUATION_RE = re.compile(r"[^\w\s]")
@@ -160,12 +164,17 @@ class BM25Indexer:
         query_text: str,
         top_k: int = 20,
         source: str | None = None,
+        user: AuthUser | None = None,
     ) -> list[RetrievedDocument]:
         """Query and hydrate sparse hits into ``RetrievedDocument`` objects.
 
         When ``source`` is given, only chunks whose ``metadata["source"]``
         matches are returned (exact, case-insensitive match). A larger
         candidate pool is scored so filtering cannot starve the top-k.
+
+        ``user`` is accepted for interface parity but is *not* enforced here:
+        the owning :class:`HybridRetriever` applies the ACL filter across the
+        fused pool, so a single enforcement point guards all retrievers.
         """
         if source:
             pool = max(100, top_k * 10)

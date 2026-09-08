@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_container, get_ingest_service, get_query_service
+from app.auth.models import AuthUser, get_role
 from app.main import create_app
 from app.services.query_service import QueryResult
 
@@ -25,6 +26,11 @@ class _EmptyBm25:
         return {"a.pdf": 2, "b.txt": 1}
 
 
+class _FakeAuthService:
+    def verify(self, token: str) -> AuthUser:
+        return AuthUser(sub="tester", name="tester", role=get_role("admin"), departments=set())
+
+
 class _FakeContainer:
     def __init__(self) -> None:
         self.query_service_obj = _FakeQueryService()
@@ -39,7 +45,17 @@ class _FakeContainer:
             openai_base_url="https://api.openai.com/v1",
             openai_api_key="",
             whisper_model="whisper-1",
+            auth_enabled=False,
         )
+
+    def auth(self):
+        return _FakeAuthService()
+
+    def audit(self):
+        return None
+
+    def user_store(self):
+        return _HealthyProbe()
 
     def update_llm_settings(self, *, provider=None, model=None, api_key=None) -> None:
         if provider:
@@ -101,7 +117,7 @@ class _FakeQueryService:
             latency_ms=1.5,
         )
 
-    def search(self, query, top_k=5, rerank=True, source=None):
+    def search(self, query, top_k=5, rerank=True, source=None, user=None):
         return QueryResult(
             query=query,
             search=[

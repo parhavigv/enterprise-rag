@@ -13,6 +13,9 @@ import time
 from dataclasses import asdict, dataclass, field
 
 from app.agents.researcher import ResearcherAgent, ResearchResponse
+from app.auth.acl import filter_by_permission
+from app.auth.audit import AuditLogger
+from app.auth.models import AuthUser
 from app.core.cache import TTLCache
 from app.core.errors import RetrieverNotReadyError
 from app.core.logging import get_logger
@@ -47,6 +50,7 @@ class QueryService:
         sparse_top_k: int = 50,
         default_final_top_k: int = 5,
         cache: TTLCache | None = None,
+        audit: AuditLogger | None = None,
     ) -> None:
         self._hybrid = hybrid
         self._researcher = researcher
@@ -56,6 +60,7 @@ class QueryService:
         self._sparse_top_k = sparse_top_k
         self._default_final_top_k = default_final_top_k
         self._cache = cache
+        self._audit = audit
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -70,11 +75,12 @@ class QueryService:
         top_k: int | None = None,
         rerank: bool = True,
         source: str | None = None,
+        user: AuthUser | None = None,
     ) -> QueryResult:
         """Retrieve (and optionally re-rank) top-k documents."""
         t0 = time.perf_counter()
         top_k = top_k or self._default_final_top_k
-        docs = self._retrieve(query, top_k, rerank, source=source)
+        docs = self._retrieve(query, top_k, rerank, source=source, user=user)
         return QueryResult(
             query=query,
             search=[d.to_dict() for d in docs],
@@ -93,6 +99,7 @@ class QueryService:
         provider: str | None = None,
         model: str | None = None,
         source: str | None = None,
+        user: AuthUser | None = None,
     ) -> QueryResult:
         """Full RAG: retrieve, re-rank, and generate a grounded answer.
 
@@ -100,11 +107,14 @@ class QueryService:
         provider/model overrides); ``images`` are attached to the LLM call as
         vision content blocks; ``provider`` / ``model`` / ``source`` only
         affect the cache key so switching scope never reuses stale answers.
+        ``user`` is the requesting principal whose role gates retrieval.
         """
         t0 = time.perf_counter()
         top_k = top_k or self._default_final_top_k
 
-        cache_key = self._cache_key(query, top_k, rerank, generate, provider, model, images, source)
+        cache_key = self._cache_key(
+            query, top_k, rerank, generate, provider, model, images, source, user
+        )
         if self._cache is not None:
             cached = self._cache.get(cache_key)
             if cached is not None:
@@ -112,7 +122,7 @@ class QueryService:
                 logger.info("Cache hit for query | key={}", cache_key)
                 return QueryResult(**cached)
 
-        docs = self._retrieve(query, top_k, rerank, source=source)
+        docs = self._retrieve(query, top_k, rerank, source=source, user=user)
 
         if generate:
             agent = researcher or self._researcher
@@ -150,16 +160,30 @@ class QueryService:
         top_k: int,
         rerank: bool,
         source: str | None = None,
+        user: AuthUser | None = None,
     ) -> list[RetrievedDocument]:
         if not self.is_ready():
             raise RetrieverNotReadyError()
-        docs = self._hybrid.retrieve(
-            query,
-            top_k=self._hybrid_top_k,
-            dense_k=self._dense_top_k,
-            sparse_k=self._sparse_top_k,
-            source=source,
-        )
+        kwargs = {
+            "top_k": self._hybrid_top_k,
+            "dense_k": self._dense_top_k,
+            "sparse_k": self._sparse_top_k,
+            "source": source,
+        }
+        if user is not None:
+            kwargs["user"] = user
+        raw = self._hybrid.retrieve(query, **kwargs)
+        requested = len(raw)
+        docs = filter_by_permission(raw, user)
+        blocked = requested - len(docs)
+        if self._audit is not None:
+            self._audit.log_access(
+                user=user,
+                query=query,
+                requested=requested,
+                returned=len(docs),
+                filtered=blocked,
+            )
         if rerank and self._reranker is not None and docs:
             docs = self._reranker.rerank_documents(query, docs, top_k=top_k)
         else:
@@ -176,7 +200,9 @@ class QueryService:
         model: str | None = None,
         images: list[str] | None = None,
         source: str | None = None,
+        user: AuthUser | None = None,
     ) -> str:
         image_count = len(images) if images else 0
-        model_scope = f"{provider}|{model}|img{image_count}|src{source}"
+        actor = getattr(user, "sub", "anonymous")
+        model_scope = f"{provider}|{model}|img{image_count}|src{source}|user{actor}"
         return f"{query.strip().lower()}|{top_k}|{rerank}|{generate}|{model_scope}"

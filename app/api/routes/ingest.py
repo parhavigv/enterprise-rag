@@ -1,4 +1,9 @@
-"""Ingestion endpoints."""
+"""Ingestion endpoints.
+
+Ingestion now requires a valid JWT and tags every chunk with ACL metadata
+(department, clearance_level, owner) so RBAC filtering can enforce access
+at retrieval time.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +14,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 
 from app.api.deps import get_container, get_ingest_service
 from app.api.models import IngestRequest, IngestResponse
+from app.auth.dependencies import get_current_user
+from app.auth.models import AuthUser
 from app.core.errors import IngestionError, InvalidInputError
 from app.core.logging import get_logger
 from app.services.container import Container
@@ -26,6 +33,8 @@ EXTENSION_TO_FORMAT = {
     ".markdown": "txt",
     ".csv": "txt",
     ".json": "txt",
+    ".xlsx": "xlsx",
+    ".xls": "xlsx",
 }
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
@@ -35,9 +44,18 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 def ingest(
     req: IngestRequest,
     background_tasks: BackgroundTasks,
+    user: AuthUser = Depends(get_current_user),
     container: Container = Depends(get_container),
     service: IngestService = Depends(get_ingest_service),
 ) -> IngestResponse:
+    acl_defaults: dict = {}
+    if req.department:
+        acl_defaults["department"] = req.department
+    if req.clearance_level:
+        acl_defaults["clearance_level"] = req.clearance_level
+    if req.owner:
+        acl_defaults["owner"] = req.owner
+
     if req.background:
         task = service.ingest_background(
             path=req.path,
@@ -45,6 +63,8 @@ def ingest(
             chunk_size=req.chunk_size,
             collection_name=req.collection_name,
             rebuild_bm25=req.rebuild_bm25,
+            source_name=Path(req.path).name,
+            **acl_defaults,
         )
 
         def _run_and_refresh() -> None:
@@ -61,6 +81,8 @@ def ingest(
             chunk_size=req.chunk_size,
             collection_name=req.collection_name,
             rebuild_bm25=req.rebuild_bm25,
+            source_name=Path(req.path).name,
+            **acl_defaults,
         )
         container.refresh_index()
     except (FileNotFoundError, ValueError) as e:
@@ -84,6 +106,10 @@ async def upload(
     file: UploadFile = File(..., description="Document to index"),
     chunk_size: str = Form("512T", description="One of: 256T, 512T, 1024T"),
     rebuild_bm25: bool = Form(False, description="Force BM25 index rebuild"),
+    department: str | None = Form(None, description="Owning department (ACL metadata)"),
+    clearance_level: str | None = Form(None, description="public|internal|confidential|secret"),
+    owner: str | None = Form(None, description="Document owner (ACL metadata)"),
+    user: AuthUser = Depends(get_current_user),
     container: Container = Depends(get_container),
     service: IngestService = Depends(get_ingest_service),
 ) -> IngestResponse:
@@ -120,6 +146,9 @@ async def upload(
             collection_name=settings.chroma_collection,
             rebuild_bm25=rebuild_bm25,
             source_name=file.filename,
+            department=department,
+            clearance_level=clearance_level,
+            owner=owner,
         )
         container.refresh_index()
     except (FileNotFoundError, ValueError, InvalidInputError) as e:

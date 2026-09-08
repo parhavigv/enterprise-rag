@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from app.agents.llm_client import AsyncLLMClient
 from app.agents.researcher import ResearcherAgent
+from app.auth.audit import AuditLogger
+from app.auth.service import AuthService
+from app.auth.users import UserStore
 from app.core.cache import TTLCache
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
@@ -49,6 +52,26 @@ class Container:
                 max_entries=self._settings.cache_max_entries,
             ),
         )
+
+    # ------------------------------------------------------------------ #
+    # RBAC / Auth
+    # ------------------------------------------------------------------ #
+    def auth(self) -> AuthService:
+        return self._memo(
+            "auth",
+            lambda: AuthService(
+                secret=self._settings.auth_jwt_secret or None,
+                algorithm=self._settings.auth_jwt_algorithm,
+                expiry_seconds=self._settings.auth_jwt_expiry_seconds,
+                issuer=self._settings.auth_issuer,
+            ),
+        )
+
+    def user_store(self) -> UserStore:
+        return self._memo("user_store", UserStore)
+
+    def audit(self) -> AuditLogger:
+        return self._memo("audit", lambda: AuditLogger(enabled=self._settings.audit_enabled))
 
     # ------------------------------------------------------------------ #
     # Retrieval stack
@@ -183,6 +206,7 @@ class Container:
                 sparse_top_k=self._settings.sparse_top_k,
                 default_final_top_k=self._settings.final_top_k,
                 cache=self.cache() if self._settings.cache_enabled else None,
+                audit=self.audit(),
             ),
         )
 

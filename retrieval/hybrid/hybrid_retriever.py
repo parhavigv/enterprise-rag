@@ -14,7 +14,10 @@ Fusion formula::
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import Any
 
+from app.auth.acl import filter_by_permission
+from app.auth.models import AuthUser
 from retrieval.bm25 import BM25Indexer
 from retrieval.dense import DenseRetriever
 from retrieval.types import RetrievedDocument
@@ -51,6 +54,7 @@ class HybridRetriever:
         dense_k: int = 50,
         sparse_k: int = 50,
         source: str | None = None,
+        user: AuthUser | None = None,
     ) -> list[RetrievedDocument]:
         if not query or not query.strip():
             raise ValueError("Query text must not be empty.")
@@ -58,10 +62,21 @@ class HybridRetriever:
             raise ValueError("top_k must be >= 1")
 
         where = {"source": source} if source else None
-        dense_hits = self._dense.retrieve(query, top_k=dense_k, where=where)
-        sparse_hits = self._sparse.query_documents(query, top_k=sparse_k, source=source)
+        dense_kwargs: dict[str, Any] = {"where": where}
+        if user is not None:
+            dense_kwargs["user"] = user
+        dense_hits = self._dense.retrieve(query, top_k=dense_k, **dense_kwargs)
+
+        sparse_kwargs: dict[str, Any] = {"source": source}
+        if user is not None:
+            sparse_kwargs["user"] = user
+        sparse_hits = self._sparse.query_documents(query, top_k=sparse_k, **sparse_kwargs)
+
+        dense_hits = filter_by_permission(dense_hits, user)
+        sparse_hits = filter_by_permission(sparse_hits, user)
 
         fused = self.fuse(dense_hits, sparse_hits, top_k=top_k)
+        fused = filter_by_permission(fused, user)
         for doc in fused:
             doc.source = "hybrid"
         return fused

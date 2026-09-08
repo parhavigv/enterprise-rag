@@ -10,7 +10,7 @@ from importlib.metadata import version as pkg_version
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import health, ingest, query, speech, ui
+from app.api.routes import audit, auth, health, ingest, query, speech, ui
 from app.api.routes import settings as settings_routes
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
@@ -95,6 +95,8 @@ def create_app(settings=None, container: Container | None = None) -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(health.api_router, prefix=settings.api_prefix)
+    app.include_router(auth.router, prefix=settings.api_prefix + "/auth")
+    app.include_router(audit.router, prefix=settings.api_prefix)
     app.include_router(query.router, prefix=settings.api_prefix)
     app.include_router(ingest.router, prefix=settings.api_prefix)
     app.include_router(speech.router, prefix=settings.api_prefix)

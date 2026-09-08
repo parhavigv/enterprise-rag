@@ -89,17 +89,26 @@ class QueryResponse(BaseModel):
 # --------------------------------------------------------------------- #
 class IngestRequest(BaseModel):
     path: str = Field(..., min_length=1, max_length=2048, description="File path or URL")
-    format: str = Field(..., description="One of: pdf, docx, url")
+    format: str = Field(..., description="One of: pdf, docx, txt, url, xlsx")
     chunk_size: str = Field("512T", description="One of: 256T, 512T, 1024T")
     collection_name: str = Field("enterprise_rag", min_length=1, max_length=128)
     rebuild_bm25: bool = Field(False, description="Force BM25 index rebuild")
     background: bool = Field(False, description="Run in a background task")
+    department: str | None = Field(
+        None,
+        max_length=64,
+        description="Owning department (ACL metadata)",
+    )
+    clearance_level: str | None = Field(
+        None, description="Sensitivity (ACL metadata): public | internal | confidential | secret"
+    )
+    owner: str | None = Field(None, max_length=128, description="Document owner (ACL metadata)")
 
     @field_validator("format")
     @classmethod
     def _validate_format(cls, v: str) -> str:
-        if v not in {"pdf", "docx", "url"}:
-            raise ValueError("format must be one of: pdf, docx, url")
+        if v not in {"pdf", "docx", "txt", "url", "xlsx"}:
+            raise ValueError("format must be one of: pdf, docx, txt, url, xlsx")
         return v
 
     @field_validator("chunk_size")
@@ -109,11 +118,58 @@ class IngestRequest(BaseModel):
             raise ValueError("chunk_size must be one of: 256T, 512T, 1024T")
         return v
 
+    @field_validator("clearance_level")
+    @classmethod
+    def _validate_clearance(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        norm = v.strip().upper()
+        allowed = {"PUBLIC", "INTERNAL", "CONFIDENTIAL", "SECRET"}
+        if norm not in allowed:
+            raise ValueError(
+                "clearance_level must be one of: public, internal, confidential, secret"
+            )
+        return norm
+
+    @field_validator("department")
+    @classmethod
+    def _normalise_department(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip().upper()
+        return v or None
+
 
 class IngestResponse(BaseModel):
     status: str = "started"
     background: bool = False
     metrics: dict[str, Any] = Field(default_factory=dict)
+
+
+# --------------------------------------------------------------------- #
+# Auth
+# --------------------------------------------------------------------- #
+class LoginRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=128)
+    password: str = Field(..., min_length=1, max_length=128)
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: dict[str, Any] = Field(default_factory=dict)
+
+
+class AuditLogEntry(BaseModel):
+    event: str
+    actor: str
+    role: str
+    query: str
+    requested: int
+    returned: int
+    filtered: int
+    ts: float
 
 
 # --------------------------------------------------------------------- #
